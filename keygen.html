@@ -25,11 +25,9 @@
       const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
       const pub = b64u(await crypto.subtle.exportKey('raw', kp.publicKey));
       const priv = (await crypto.subtle.exportKey('jwk', kp.privateKey)).d;
-      const cron = b64u(crypto.getRandomValues(new Uint8Array(24)));
       document.getElementById('out').innerHTML = `
-        <div class="k"><b>VAPID_PUBLIC_KEY — Edge Function Secrets 와 web/js/config.js 두 곳에 넣기</b><code>${pub}</code></div>
+        <div class="k"><b>VAPID_PUBLIC_KEY — Edge Function Secrets 에 넣고, Claude 에게도 보내기</b><code>${pub}</code></div>
         <div class="k"><b>VAPID_PRIVATE_KEY — Edge Function Secrets 에만 넣기 (공개 금지)</b><code>${priv}</code></div>
-        <div class="k"><b>CRON_SECRET — Edge Function Secrets 와 setup.sql 두 곳에 넣기</b><code>${cron}</code></div>
         <p class="warn">페이지를 닫으면 다시 볼 수 없어요. 메모 앱 등에 잠시 복사해 두세요.</p>`;
     };
   </script>

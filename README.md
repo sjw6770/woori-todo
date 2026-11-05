@@ -53,7 +53,7 @@ woori-todo/                 ← 이 저장소 = GitHub Pages 로 공개되는 �
 
 ### 4. 알림 키 만들기
 1. `https://<GitHub아이디>.github.io/woori-todo/keygen.html` 열기 → **키 만들기**
-2. 나온 3개 값(공개 키, 비공개 키, CRON_SECRET)을 메모해 두기
+2. 나온 2개 값(공개 키, 비공개 키)을 메모해 두기
 
 ### 5. 알림 함수 배포
 1. Supabase **Edge Functions → Deploy a new function → Via Editor**
@@ -67,12 +67,11 @@ woori-todo/                 ← 이 저장소 = GitHub Pages 로 공개되는 �
 | `VAPID_PUBLIC_KEY` | 4단계 공개 키 |
 | `VAPID_PRIVATE_KEY` | 4단계 비공개 키 |
 | `VAPID_SUBJECT` | `mailto:본인이메일` |
-| `CRON_SECRET` | 4단계 CRON_SECRET |
+| `CRON_SECRET` | 6단계 SQL 결과의 cron_secret 값 |
 
 ### 6. 마무리 SQL
-`supabase/setup.sql` 의 `<...>` 4곳(두 이메일, 프로젝트 URL, CRON_SECRET)을 바꿔서 **SQL Editor** 에서 Run.  
-마지막 `select` 에 종원·지윤 두 줄이 보이면 성공.  
-프로젝트 URL 은 **Project Settings → Data API(또는 API)** 의 `https://xxxx.supabase.co`.
+`supabase/setup.sql` 을 **SQL Editor** 에서 Run (이메일·프로젝트 주소는 이미 채워져 있음).  
+결과에 `종원, 지윤` 과 `cron_secret` 값이 보이면 성공 → 그 값을 5단계 Secrets 의 `CRON_SECRET` 에 넣기.
 
 ### 7. 앱에 서버 연결
 GitHub 저장소에서 `js/config.js` 열기 → 연필(편집) 아이콘 → 3개 값 입력 → Commit
