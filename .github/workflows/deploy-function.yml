@@ -40,3 +40,10 @@ jobs:
             CRON_SECRET="$CRON_SECRET"
       - name: Deploy function
         run: supabase functions deploy push-tick --remote="$PROJECT_REF" --no-verify-jwt --yes
+      - name: Health check (cron 과 같은 방식으로 호출)
+        run: |
+          sleep 5
+          res=$(curl -s -w '\n%{http_code}' -X POST "https://$PROJECT_REF.supabase.co/functions/v1/push-tick" \
+            -H "Content-Type: application/json" -H "x-cron-secret: $CRON_SECRET" -d '{"action":"tick"}')
+          echo "$res"
+          [ "$(echo "$res" | tail -1)" = "200" ] || { echo "::error::함수 응답이 200이 아님"; exit 1; }
