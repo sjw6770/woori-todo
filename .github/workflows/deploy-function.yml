@@ -56,3 +56,11 @@ jobs:
             -H "Content-Type: application/json" -H "x-cron-secret: $CLEAN_CRON_SECRET" -d '{"action":"tick"}')
           echo "$res"
           [ "$(echo "$res" | tail -1)" = "200" ] || { echo "::error::함수 응답이 200이 아님"; exit 1; }
+      - name: DB check (구성원 · 매분 호출 기록)
+        run: |
+          q() { curl -s -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+                  -d "{\"query\": \"$1\"}"; echo; }
+          q "select name from public.members"
+          q "select jobname, schedule, active from cron.job"
+          q "select status_code, left(content::text, 80) as body, created from net._http_response order by created desc limit 3"
