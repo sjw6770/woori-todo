@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>우리할일 키 만들기</title>
+  <style>
+    body { font: 15px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; max-width: 640px; margin: 0 auto; padding: 24px 16px; color: #1d2420; background: #f2f5f3; }
+    h1 { font-size: 22px; }
+    button { font: inherit; font-weight: 700; padding: 12px 18px; border-radius: 12px; border: 0; background: #1d2420; color: #fff; }
+    .k { background: #fff; border-radius: 12px; padding: 12px; margin: 12px 0; }
+    .k b { display: block; font-size: 13px; color: #67716b; }
+    code { display: block; word-break: break-all; font-size: 13px; margin: 6px 0; user-select: all; }
+    .warn { color: #b5601c; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>알림용 키 만들기</h1>
+  <p>이 페이지는 브라우저 안에서만 키를 만들고, 어디에도 전송하지 않습니다. 한 번만 만들어서 아래 위치에 붙여 넣으세요.</p>
+  <button id="go">키 만들기</button>
+  <div id="out"></div>
+  <script>
+    const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    document.getElementById('go').onclick = async () => {
+      const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+      const pub = b64u(await crypto.subtle.exportKey('raw', kp.publicKey));
+      const priv = (await crypto.subtle.exportKey('jwk', kp.privateKey)).d;
+      const cron = b64u(crypto.getRandomValues(new Uint8Array(24)));
+      document.getElementById('out').innerHTML = `
+        <div class="k"><b>VAPID_PUBLIC_KEY — Edge Function Secrets 와 web/js/config.js 두 곳에 넣기</b><code>${pub}</code></div>
+        <div class="k"><b>VAPID_PRIVATE_KEY — Edge Function Secrets 에만 넣기 (공개 금지)</b><code>${priv}</code></div>
+        <div class="k"><b>CRON_SECRET — Edge Function Secrets 와 setup.sql 두 곳에 넣기</b><code>${cron}</code></div>
+        <p class="warn">페이지를 닫으면 다시 볼 수 없어요. 메모 앱 등에 잠시 복사해 두세요.</p>`;
+    };
+  </script>
+</body>
+</html>
