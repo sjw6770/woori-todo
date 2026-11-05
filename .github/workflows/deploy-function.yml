@@ -1,0 +1,42 @@
+# 알림 함수(push-tick)를 Supabase 에 자동 배포합니다.
+# 필요한 GitHub Secrets: SUPABASE_ACCESS_TOKEN, VAPID_PRIVATE_KEY, CRON_SECRET
+name: Deploy push-tick
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/**", ".github/workflows/deploy-function.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      PROJECT_REF: gfaawesckaispbyjkost
+      VAPID_PUBLIC_KEY: BLR6y1KOYQrf3bZcN0GaeBL2Fx-py2sEh139Ouxx2Yt9KllNTbAQ1xZ-XAizSQfTf__yiXwqSXRQvNN_G4qo--g
+    steps:
+      - name: Check secrets
+        run: |
+          missing=""
+          for k in SUPABASE_ACCESS_TOKEN VAPID_PRIVATE_KEY CRON_SECRET; do
+            [ -z "${!k}" ] && missing="$missing $k"
+          done
+          if [ -n "$missing" ]; then echo "::error::GitHub Secrets 에 없음:$missing"; exit 1; fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Set function secrets
+        run: |
+          supabase secrets set --project-ref "$PROJECT_REF" \
+            VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY" \
+            VAPID_PRIVATE_KEY="$VAPID_PRIVATE_KEY" \
+            VAPID_SUBJECT="mailto:bellone1110@gmail.com" \
+            CRON_SECRET="$CRON_SECRET"
+      - name: Deploy function
+        run: supabase functions deploy push-tick --project-ref "$PROJECT_REF" --no-verify-jwt --yes

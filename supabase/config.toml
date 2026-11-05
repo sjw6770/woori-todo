@@ -1,0 +1,4 @@
+project_id = "gfaawesckaispbyjkost"
+
+[functions.push-tick]
+verify_jwt = false
