@@ -4,5 +4,5 @@
 export const CONFIG = {
   SUPABASE_URL: 'https://gfaawesckaispbyjkost.supabase.co',        // 예: https://abcdefghijk.supabase.co
   SUPABASE_KEY: 'sb_publishable_jgAvN83AEKbopSxA3oxjdw_qlqzylpi',        // Project Settings > API Keys 의 Publishable key (sb_publishable_...) 또는 anon key
-  VAPID_PUBLIC_KEY: '',    // keygen.html 에서 만든 공개 키
+  VAPID_PUBLIC_KEY: 'BLR6y1KOYQrf3bZcN0GaeBL2Fx-py2sEh139Ouxx2Yt9KllNTbAQ1xZ-XAizSQfTf__yiXwqSXRQvNN_G4qo--g',    // keygen.html 에서 만든 공개 키
 };
