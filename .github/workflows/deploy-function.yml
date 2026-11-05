@@ -25,6 +25,15 @@ jobs:
             [ -z "${!k}" ] && missing="$missing $k"
           done
           if [ -n "$missing" ]; then echo "::error::GitHub Secrets 에 없음:$missing"; exit 1; fi
+      - name: Clean secrets (복사할 때 섞인 공백·따옴표 제거)
+        run: |
+          vp=$(printf %s "$VAPID_PRIVATE_KEY" | tr -cd 'A-Za-z0-9_-')
+          cs=$(printf %s "$CRON_SECRET" | tr -cd 'A-Za-z0-9_-')
+          echo "::add-mask::$vp"; echo "::add-mask::$cs"
+          echo "CLEAN_VAPID_PRIVATE_KEY=$vp" >> "$GITHUB_ENV"
+          echo "CLEAN_CRON_SECRET=$cs" >> "$GITHUB_ENV"
+          echo "VAPID_PRIVATE_KEY 길이: ${#vp} (정상 43) / 원래 ${#VAPID_PRIVATE_KEY}"
+          echo "CRON_SECRET 길이: ${#cs} (정상 64) / 원래 ${#CRON_SECRET}"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -35,15 +44,15 @@ jobs:
         run: |
           supabase secrets set --remote="$PROJECT_REF" --yes \
             VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY" \
-            VAPID_PRIVATE_KEY="$VAPID_PRIVATE_KEY" \
+            VAPID_PRIVATE_KEY="$CLEAN_VAPID_PRIVATE_KEY" \
             VAPID_SUBJECT="mailto:bellone1110@gmail.com" \
-            CRON_SECRET="$CRON_SECRET"
+            CRON_SECRET="$CLEAN_CRON_SECRET"
       - name: Deploy function
         run: supabase functions deploy push-tick --remote="$PROJECT_REF" --no-verify-jwt --yes
       - name: Health check (cron 과 같은 방식으로 호출)
         run: |
           sleep 5
           res=$(curl -s -w '\n%{http_code}' -X POST "https://$PROJECT_REF.supabase.co/functions/v1/push-tick" \
-            -H "Content-Type: application/json" -H "x-cron-secret: $CRON_SECRET" -d '{"action":"tick"}')
+            -H "Content-Type: application/json" -H "x-cron-secret: $CLEAN_CRON_SECRET" -d '{"action":"tick"}')
           echo "$res"
           [ "$(echo "$res" | tail -1)" = "200" ] || { echo "::error::함수 응답이 200이 아님"; exit 1; }
