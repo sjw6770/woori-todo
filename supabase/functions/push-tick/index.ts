@@ -21,16 +21,22 @@ function serviceKey(): string {
   }
   return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 }
-const SERVICE_KEY = serviceKey();
 const CRON_SECRET = Deno.env.get("CRON_SECRET") ?? "";
 
-webpush.setVapidDetails(
-  Deno.env.get("VAPID_SUBJECT") ?? "mailto:admin@example.com",
-  Deno.env.get("VAPID_PUBLIC_KEY")!,
-  Deno.env.get("VAPID_PRIVATE_KEY")!,
-);
-
-const db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+// 시작 시 오류가 나도 함수가 죽지 않고 원인을 응답으로 돌려주도록 첫 요청 때 초기화
+// deno-lint-ignore no-explicit-any
+let db: any = null;
+function init() {
+  if (db) return;
+  const env = {
+    SUPABASE_URL, VAPID_PUBLIC_KEY: Deno.env.get("VAPID_PUBLIC_KEY"),
+    VAPID_PRIVATE_KEY: Deno.env.get("VAPID_PRIVATE_KEY"), SERVICE_KEY: serviceKey(),
+  };
+  const missing = Object.entries(env).filter(([, v]) => !v).map(([k]) => k);
+  if (missing.length) throw new Error("missing env: " + missing.join(", "));
+  webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT") ?? "mailto:admin@example.com", env.VAPID_PUBLIC_KEY!, env.VAPID_PRIVATE_KEY!);
+  db = createClient(SUPABASE_URL, env.SERVICE_KEY, { auth: { persistSession: false } });
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -263,6 +269,7 @@ async function fromApp(req: Request, body: Record<string, string>) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
+    init();
     const body = await req.json().catch(() => ({}));
     if (body.action === "tick") {
       if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) return json({ error: "forbidden" }, 403);
