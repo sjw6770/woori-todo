@@ -15,6 +15,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}   # 선택: 있으면 장소 검색에 카카오 사용
       PROJECT_REF: gfaawesckaispbyjkost
       VAPID_PUBLIC_KEY: BLR6y1KOYQrf3bZcN0GaeBL2Fx-py2sEh139Ouxx2Yt9KllNTbAQ1xZ-XAizSQfTf__yiXwqSXRQvNN_G4qo--g
     steps:
@@ -67,6 +68,14 @@ jobs:
             VAPID_PRIVATE_KEY="$CLEAN_VAPID_PRIVATE_KEY" \
             VAPID_SUBJECT="mailto:bellone1110@gmail.com" \
             CRON_SECRET="$CLEAN_CRON_SECRET"
+          kk=$(printf %s "$KAKAO_REST_KEY" | tr -cd 'A-Za-z0-9')
+          if [ -n "$kk" ]; then
+            echo "::add-mask::$kk"
+            echo "KAKAO_REST_KEY 길이: ${#kk} (보통 32) → 장소 검색: 카카오"
+            supabase secrets set --remote="$PROJECT_REF" --yes KAKAO_REST_KEY="$kk"
+          else
+            echo "KAKAO_REST_KEY 없음 → 장소 검색: OpenStreetMap"
+          fi
       - name: Deploy function
         run: supabase functions deploy push-tick --remote="$PROJECT_REF" --no-verify-jwt --yes
       - name: Health check (cron 과 같은 방식으로 호출)
@@ -88,3 +97,12 @@ jobs:
           q "select count(*) as items, count(*) filter (where kind = 'task') as quests from public.items"
           q "select count(*) as calm_sessions, count(*) filter (where ended_at is null) as active from public.calm_sessions"
           q "select count(*) as moods from public.moods"
+          q "select count(*) as places from public.places"
+      - name: Place search check (장소 검색 동작 확인)
+        run: |
+          for q in "남산서울타워" "성수 카페"; do
+            curl -s -X POST "https://$PROJECT_REF.supabase.co/functions/v1/push-tick" \
+              -H "Content-Type: application/json" -H "x-cron-secret: $CLEAN_CRON_SECRET" \
+              -d "{\"action\":\"place-test\",\"query\":\"$q\"}" | head -c 500; echo
+            sleep 2
+          done

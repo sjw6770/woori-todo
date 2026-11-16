@@ -117,6 +117,60 @@ function fireSlots(item: Item, fireDate: string) {
   }
   return slots;
 }
+// ---------------------------------------------------------------- 장소 검색
+const KAKAO_KEY = Deno.env.get("KAKAO_REST_KEY") ?? "";
+type PlaceResult = {
+  source: "kakao" | "osm"; source_id: string | null; name: string; category: string;
+  address: string; phone?: string; lat: number; lng: number; url: string;
+};
+
+async function kakaoGet(path: string, params: Record<string, string>) {
+  const res = await fetch(`https://dapi.kakao.com${path}?${new URLSearchParams(params)}`, {
+    headers: { Authorization: `KakaoAK ${KAKAO_KEY}` },
+  });
+  if (!res.ok) throw new Error(`kakao ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return await res.json();
+}
+// deno-lint-ignore no-explicit-any
+const kakaoPlace = (d: any): PlaceResult => ({
+  source: "kakao", source_id: String(d.id), name: d.place_name,
+  category: d.category_group_name || String(d.category_name ?? "").split(">").pop()!.trim(),
+  address: d.road_address_name || d.address_name, phone: d.phone || undefined,
+  lat: Number(d.y), lng: Number(d.x), url: d.place_url,
+});
+async function kakaoKeyword(q: string, page = 1) {
+  const j = await kakaoGet("/v2/local/search/keyword.json", { query: q, page: String(page), size: "15" });
+  return { results: (j.documents ?? []).map(kakaoPlace) as PlaceResult[], end: Boolean(j.meta?.is_end) };
+}
+async function kakaoAddress(q: string) {
+  const j = await kakaoGet("/v2/local/search/address.json", { query: q, size: "10" });
+  // deno-lint-ignore no-explicit-any
+  return (j.documents ?? []).map((d: any): PlaceResult => ({
+    source: "kakao", source_id: null, name: d.road_address?.building_name || d.address_name, category: "주소",
+    address: d.road_address?.address_name || d.address_name, lat: Number(d.y), lng: Number(d.x),
+    url: `https://map.kakao.com/link/map/${encodeURIComponent(d.address_name)},${d.y},${d.x}`,
+  }));
+}
+async function kakaoSearch(q: string) {
+  const { results } = await kakaoKeyword(q);
+  return results.length ? results : await kakaoAddress(q);
+}
+
+// OpenStreetMap Nominatim (키 불필요, 초당 1회 이하·식별 가능한 User-Agent 필수 정책)
+async function osmSearch(q: string): Promise<PlaceResult[]> {
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({
+    q, format: "jsonv2", addressdetails: "0", limit: "10", "accept-language": "ko", countrycodes: "kr",
+  })}`, { headers: { "User-Agent": "woori-todo/1.0 (personal couple app; https://github.com/sjw6770/woori-todo)" } });
+  if (!res.ok) throw new Error(`osm ${res.status}`);
+  // deno-lint-ignore no-explicit-any
+  return (await res.json()).map((r: any): PlaceResult => ({
+    source: "osm", source_id: `${r.osm_type}/${r.osm_id}`,
+    name: r.name || String(r.display_name).split(",")[0], category: r.type && r.type !== "yes" ? r.type : r.category ?? "",
+    address: String(r.display_name).split(",").map((s: string) => s.trim()).reverse().filter((s: string) => s !== "대한민국" && !/^\d{5}$/.test(s)).join(" "),
+    lat: Number(r.lat), lng: Number(r.lon), url: `https://www.openstreetmap.org/${r.osm_type}/${r.osm_id}`,
+  }));
+}
+
 // 레벨 규칙 (web/js/quest.js 와 동일): Lv.L→L+1 에 100 + 50(L-1) XP
 const xpToReach = (L: number) => 100 * (L - 1) + (50 * (L - 1) * (L - 2)) / 2;
 function levelOf(total: number) {
@@ -277,6 +331,47 @@ async function fromApp(req: Request, body: Record<string, string>) {
     return json({ ok: true, sent: n });
   }
 
+  // 장소 검색 (카카오 키가 있으면 카카오, 없으면 OpenStreetMap)
+  if (body.action === "place-search") {
+    const q = String(body.query ?? "").trim().slice(0, 100);
+    if (!q) return json({ provider: KAKAO_KEY ? "kakao" : "osm", results: [] });
+    try {
+      return json(KAKAO_KEY ? { provider: "kakao", results: await kakaoSearch(q) } : { provider: "osm", results: await osmSearch(q) });
+    } catch (e) {
+      return json({ error: (e as Error).message }, 502);
+    }
+  }
+
+  // 저장된 카카오 장소를 실시간으로 다시 조회 (ID + 검색어만 저장하므로)
+  if (body.action === "place-lookup") {
+    if (!KAKAO_KEY) return json({ provider: "osm", info: {} });
+    const list = (Array.isArray(body.places) ? body.places : []).slice(0, 60) as unknown as { id: string; source_id: string | null; query: string }[];
+    const info: Record<string, PlaceResult | null> = {};
+    const byQuery = new Map<string, { id: string; source_id: string | null }[]>();
+    for (const p of list) {
+      if (!p?.query) continue;
+      if (!byQuery.has(p.query)) byQuery.set(p.query, []);
+      byQuery.get(p.query)!.push(p);
+    }
+    for (const [q, ps] of byQuery) {
+      const want = new Set(ps.map((p) => p.source_id).filter(Boolean));
+      const found = new Map<string, PlaceResult>();
+      let addrFirst: PlaceResult | null = null;
+      try {
+        for (let page = 1; page <= 3 && [...want].some((w) => !found.has(w!)); page++) {
+          const { results, end } = await kakaoKeyword(q, page);
+          for (const r of results) if (r.source_id) found.set(r.source_id, r);
+          if (end) break;
+        }
+        if (ps.some((p) => !p.source_id)) addrFirst = (await kakaoAddress(q))[0] ?? null;
+      } catch (e) {
+        console.error("lookup", (e as Error).message);
+      }
+      for (const p of ps) info[p.id] = p.source_id ? found.get(p.source_id) ?? null : addrFirst;
+    }
+    return json({ provider: "kakao", info });
+  }
+
   // 진정하기: 요청(start) → 상대에게, 수락(accept) → 요청한 사람에게, 끝(end) → 상대에게
   if (body.action === "calm") {
     const { data: s } = await db.from("calm_sessions").select("*").eq("id", body.session_id).maybeSingle();
@@ -345,6 +440,13 @@ Deno.serve(async (req) => {
     if (body.action === "tick") {
       if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) return json({ error: "forbidden" }, 403);
       return json(await tick());
+    }
+    // 배포 확인용: 장소 검색이 실제로 되는지 (CRON_SECRET 필요)
+    if (body.action === "place-test") {
+      if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) return json({ error: "forbidden" }, 403);
+      const q = String(body.query || "남산서울타워");
+      const results = KAKAO_KEY ? await kakaoSearch(q) : await osmSearch(q);
+      return json({ provider: KAKAO_KEY ? "kakao" : "osm", count: results.length, first: results[0] ?? null });
     }
     return await fromApp(req, body);
   } catch (e) {
