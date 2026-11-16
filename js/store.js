@@ -10,6 +10,7 @@ class SupabaseStore {
   demo = false;
   me = null; members = []; items = []; completions = [];
   xpTotals = {}; xpLog = []; rewards = [];
+  calm = null;   // 진행 중인 진정하기 (없으면 null)
   #sb; #listeners = []; #channel = null;
 
   async init() {
@@ -57,15 +58,17 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest] = await Promise.all([
+    const [m, items, comps, quest, calm] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
       this.#loadQuest(),
+      this.#sb.from('calm_sessions').select('*').is('ended_at', null).order('started_at', { ascending: false }).limit(1),
     ]);
     if (m.error) throw new Error(m.error.message);
     this.members = m.data; this.items = items; this.completions = comps;
     Object.assign(this, quest);
+    this.calm = calm.error ? null : calm.data[0] ?? null;
     if (this.me) this.me = this.members.find((x) => x.id === this.me.id);
   }
 
@@ -91,6 +94,7 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'completions' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'xp_log' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'calm_sessions' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -149,6 +153,24 @@ class SupabaseStore {
 
   async claimReward(id, claimed) {
     const { error } = await this.#sb.from('rewards').update({ claimed_at: claimed ? new Date().toISOString() : null }).eq('id', id);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+
+  // 진정하기 (시작·종료 시각은 서버가 정함)
+  async startCalm({ minutes, message }) {
+    const { data, error } = await this.#sb.from('calm_sessions').insert({ minutes, message }).select().single();
+    if (error) throw new Error(error.message);
+    await this.load();
+    return data;
+  }
+  async acceptCalm(id) {
+    const { error } = await this.#sb.from('calm_sessions').update({ accepted_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async endCalm(id) {
+    const { error } = await this.#sb.from('calm_sessions').update({ ended_at: new Date().toISOString(), ended_by: this.me.id }).eq('id', id);
     if (error) throw new Error(error.message);
     await this.load();
   }
@@ -229,6 +251,7 @@ class DemoStore {
   demo = true;
   me = null; members = []; items = []; completions = [];
   xpTotals = {}; xpLog = []; rewards = [];
+  calm = null;
   #db; #listeners = [];
 
   #read() {
@@ -243,6 +266,7 @@ class DemoStore {
     for (const x of this.#db.xp_log) this.xpTotals[x.member_id] = (this.xpTotals[x.member_id] ?? 0) + x.xp;
     this.xpLog = [...this.#db.xp_log].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100);
     this.rewards = [...this.#db.rewards].sort((a, b) => a.level - b.level);
+    this.calm = this.#db.calm && !this.#db.calm.ended_at ? this.#db.calm : null;
   }
 
   async init() { this.#db = this.#read(); this.#sync(); return { needLogin: false }; }
@@ -292,6 +316,15 @@ class DemoStore {
     this.#db.rewards.find((x) => x.id === id).claimed_at = claimed ? new Date().toISOString() : null;
     this.#write(); this.#sync();
   }
+  async startCalm({ minutes, message }) {
+    const now = Date.now();
+    this.#db.calm = { id: uid(), from_member: this.me.id, minutes, message, started_at: new Date(now).toISOString(),
+      ends_at: new Date(now + minutes * 60000).toISOString(), accepted_at: null, ended_at: null, ended_by: null };
+    this.#write(); this.#sync();
+    return this.#db.calm;
+  }
+  async acceptCalm() { this.#db.calm.accepted_at = new Date().toISOString(); this.#write(); this.#sync(); }
+  async endCalm() { Object.assign(this.#db.calm, { ended_at: new Date().toISOString(), ended_by: this.me.id }); this.#write(); this.#sync(); }
   async updateMe(patch) { Object.assign(this.#db.members.find((m) => m.id === this.me.id), patch); this.#write(); this.#sync(); }
   async savePush() {}
   async callFn() { return { ok: true, demo: true }; }

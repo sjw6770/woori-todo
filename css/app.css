@@ -16,6 +16,13 @@
   --on-gold: #2a1f05;
   --epic: #6f45c2;
   --epic-bg: #efe8fb;
+  --calm-bg: #e2eeeb;     /* 진정 시간 화면 */
+  --calm-ink: #1b3431;
+  --calm-muted: #52706b;
+  --calm-accent: #4a9087;
+  --calm-soft: #cae2dd;
+  --calm-btn: #1f4c46;
+  --calm-on-btn: #ffffff;
   --shadow: 0 6px 24px rgba(29, 36, 32, .14);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
@@ -26,6 +33,7 @@
     --bg: #141816; --surface: #1d2320; --field: #262d29; --ink: #e7ece9; --muted: #95a09a;
     --line: #2c3430; --strong-line: #46504a; --warn: #e39550; --danger: #ef6b6b; --on-ink: #141816;
     --gold: #e9b95a; --gold-bg: #362d1b; --gold-fill: #e5b351; --on-gold: #241a04; --epic: #bca2f4; --epic-bg: #2d2640;
+    --calm-bg: #0f1f1d; --calm-ink: #d6ebe6; --calm-muted: #8eaea8; --calm-accent: #6fb8ad; --calm-soft: #1c3532; --calm-btn: #cde7e1; --calm-on-btn: #0f1f1d;
     --shadow: 0 6px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
@@ -328,4 +336,83 @@ svg { width: 1em; height: 1em; display: block; }
 @media (prefers-reduced-motion: reduce) {
   .lvup-num, .lvup-num::before { animation: none; }
   .lvup-num::before { display: none; }
+}
+
+/* =====================================================================
+   진정하기
+   ===================================================================== */
+.toprow { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.calm-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px 6px 10px; border-radius: 999px;
+  font-size: 14px; font-weight: 700; background: var(--surface); border: 1px solid var(--line);
+}
+.calm-btn svg { font-size: 18px; color: var(--calm-accent); }
+.calm-btn.on { background: var(--calm-soft); border-color: transparent; color: var(--calm-ink); }
+.calm-btn b { font-variant-numeric: tabular-nums; }
+
+.calm-banner {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 6; width: 100%;
+  display: flex; align-items: center; gap: 8px; padding-block: 9px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: var(--calm-soft); color: var(--calm-ink); font-size: 14px; font-weight: 700;
+}
+.calm-banner b { font-variant-numeric: tabular-nums; }
+.calm-banner em { margin-left: auto; font-style: normal; font-weight: 600; color: var(--calm-muted); }
+
+/* 진정 요청 시트 */
+.sheet-head-pad { width: 32px; }
+.calm-lead { margin: 14px 0 0; color: var(--muted); font-size: 15px; }
+.btn.calm-send { margin-top: 20px; background: var(--calm-btn); color: var(--calm-on-btn); }
+.calm-sheet .hint { text-align: center; margin-top: 10px; }
+
+/* 진정 시간 화면 (두 사람 모두에게 크게) */
+html.calm-lock body { overflow: hidden; }
+.calm {
+  position: fixed; inset: 0; z-index: 45; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--calm-bg); color: var(--calm-ink);
+  padding-block: calc(env(safe-area-inset-top, 0px) + 28px) calc(env(safe-area-inset-bottom, 0px) + 24px);
+  padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px));
+}
+.calm-inner { max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; }
+.calm-inner p { margin: 0; }
+.calm-kicker { font-size: 14px; font-weight: 800; color: var(--calm-accent); }
+.calm h2 { margin: 0; font-size: 23px; line-height: 1.3; font-weight: 800; letter-spacing: -.02em; text-wrap: balance; }
+.calm-msg { margin: 6px 0 0; padding: 10px 16px; border-radius: 14px; background: var(--calm-soft); font-size: 16px; font-weight: 600; max-width: 100%; overflow-wrap: anywhere; }
+.calm-msg::before { content: "“"; } .calm-msg::after { content: "”"; }
+
+.breath { position: relative; width: 230px; height: 230px; max-width: 100%; display: grid; place-items: center; margin: 18px 0 8px; }
+.breath-glow { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle, var(--calm-accent) 0%, transparent 68%); opacity: .28; animation: breathe 10s ease-in-out infinite; }
+.breath-core {
+  position: relative; width: 160px; height: 160px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--calm-accent); color: var(--calm-bg); font-size: 19px; font-weight: 800; line-height: 1.3;
+  animation: breathe 10s ease-in-out infinite;
+}
+.breath-core > span { grid-area: 1 / 1; }
+.b-in { animation: b-in 10s linear infinite; }
+.b-out { animation: b-out 10s linear infinite; }
+.b-done { display: none; font-size: 17px; }
+/* 4초 들이쉬기(0~40%) → 6초 내쉬기(40~100%) = 분당 6회 */
+@keyframes breathe { 0% { transform: scale(.62); } 40% { transform: scale(1); } 100% { transform: scale(.62); } }
+@keyframes b-in { 0%, 37% { opacity: 1; } 41%, 97% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes b-out { 0%, 37% { opacity: 0; } 41%, 97% { opacity: 1; } 100% { opacity: 0; } }
+.breath.rest .breath-glow, .breath.rest .breath-core { animation: none; transform: scale(.88); }
+.breath.rest .b-in, .breath.rest .b-out { display: none; }
+.breath.rest .b-done { display: block; }
+
+.breath-guide { font-size: 15px; color: var(--calm-muted); }
+.calm-left { font-size: 15px; color: var(--calm-muted); font-variant-numeric: tabular-nums; }
+.calm-left b { display: block; font-size: 34px; font-weight: 800; color: var(--calm-ink); letter-spacing: -.02em; }
+.calm-status { font-size: 14px; font-weight: 700; color: var(--calm-accent); }
+.calm-actions { width: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.calm-actions .btn.wide { margin-top: 0; }
+.btn.calm-primary { background: var(--calm-btn); color: var(--calm-on-btn); }
+.btn.calm-quiet { background: var(--calm-soft); color: var(--calm-ink); }
+.calm-end-early { font-size: 14px; font-weight: 600; color: var(--calm-muted); padding: 8px 12px; text-decoration: underline; text-underline-offset: 3px; }
+.calm-tip { margin-top: 6px !important; font-size: 13px; color: var(--calm-muted); max-width: 30ch; }
+.calm :focus-visible { outline-color: var(--calm-ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  .breath-glow, .breath-core, .b-in, .b-out { animation: none; }
+  .breath-core { transform: scale(.88); }
+  .b-in, .b-out { display: none; }
 }

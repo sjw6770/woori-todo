@@ -17,6 +17,7 @@ const state = {
   date: nowKST().date,     // 오늘 화면에서 보고 있는 날짜
   filter: 'all',           // all | <memberId> | shared
   lvWho: null,             // 레벨 화면에서 보고 있는 사람 (null = 나)
+  calmHidden: null,        // "잠깐 닫기"한 진정하기 세션 id
 };
 
 // ------------------------------------------------------------------ 유틸
@@ -73,6 +74,7 @@ const sortByTime = (a, b) => (toMin(a.time) ?? 2000) - (toMin(b.time) ?? 2000) |
 // ------------------------------------------------------------------ 행 렌더링
 const ICON = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  breath: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".55"/></svg>',
   bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 1112 0v5l1.5 2h-15zM10 20a2 2 0 004 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
   repeat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11V9a3 3 0 013-3h11l-3-3M20 13v2a3 3 0 01-3 3H6l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>',
@@ -191,6 +193,7 @@ function todayView() {
 
   return `
   <header class="top">
+    <div class="toprow">${calmButton()}</div>
     <div class="datenav">
       <button class="iconbtn" data-act="day" data-n="-1" aria-label="이전 날">${ICON.left}</button>
       <h1>${rd && rd !== '오늘' ? `<small>${rd}</small>` : ''}${longDate(d)}</h1>
@@ -458,12 +461,192 @@ function render() {
   if (!store.me) return;
   const view = { today: todayView, upcoming: upcomingView, level: levelView, settings: settingsView }[state.view]();
   const tabs = [['today', '오늘'], ['upcoming', '일정'], ['level', '레벨'], ['settings', '설정']];
+  const calm = activeCalm();
   $app.innerHTML = `
     ${store.demo ? '<div class="demo-banner">데모 모드 · 이 기기에만 저장돼요</div>' : ''}
+    ${calm && state.calmHidden === calm.id ? `<button class="calm-banner" data-act="calm-show"><span>진정 시간</span><b data-calm-left>${calmLeft(calm)}</b><em>다시 열기</em></button>` : ''}
     <div class="screen">${view}</div>
     ${state.view === 'today' || state.view === 'upcoming' ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
     <nav class="tabbar">${tabs.map(([v, l]) => `<button data-act="view" data-v="${v}" aria-current="${state.view === v ? 'page' : 'false'}">${l}</button>`).join('')}</nav>`;
   updateBadge();
+  renderCalm();
+}
+
+// ------------------------------------------------------------------ 진정하기
+// 한 사람이 요청하면 두 사람 화면 모두에 진정 시간이 크게 뜸.
+// 근거: Gottman 연구소는 다툼 중 흥분(심박 100 이상)하면 최소 20분 쉬기를 권하고,
+//       분당 6회 정도의 느린 호흡은 각성을 낮춘다는 연구가 있어 4초 들이쉬고 6초 내쉬기로 안내.
+const CALM_MINUTES = [[10, '10분'], [20, '20분'], [30, '30분'], [60, '1시간']];
+let calmTimer = null;
+let lastCalmId = null;
+let calmEndedByMe = false;
+
+function activeCalm() {
+  const s = store.calm;
+  if (!s || s.ended_at || Date.now() - Date.parse(s.ends_at) > 12 * 3600000) return null;
+  return s;
+}
+const calmDone = (s) => Date.now() >= Date.parse(s.ends_at);
+function calmLeft(s) {
+  const sec = Math.max(0, Math.ceil((Date.parse(s.ends_at) - Date.now()) / 1000));
+  if (!sec) return '끝';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), r = sec % 60;
+  const mmss = `${String(m).padStart(h ? 2 : 1, '0')}:${String(r).padStart(2, '0')}`;
+  return h ? `${h}:${mmss}` : mmss;
+}
+
+function calmButton() {
+  const s = activeCalm();
+  return s
+    ? `<button class="calm-btn on" data-act="calm-show">${ICON.breath}진정 시간 <b data-calm-left>${calmLeft(s)}</b></button>`
+    : `<button class="calm-btn" data-act="calm-open">${ICON.breath}진정하기</button>`;
+}
+
+function openCalmSheet() {
+  const p = partner();
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  wrap.innerHTML = `
+  <div class="scrim" data-close></div>
+  <form class="sheet calm-sheet" role="dialog" aria-modal="true" aria-label="진정하기">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <button type="button" class="linkbtn" data-close>취소</button>
+      <h2 class="sheet-title">진정하기</h2>
+      <span class="sheet-head-pad" aria-hidden="true"></span>
+    </div>
+    <p class="calm-lead">${p ? `${esc(p.name)}의 화면에도` : '두 사람 화면에'} 진정 시간이 크게 떠요. 둘 다 잠시 쉬고, 정한 시간 뒤에 다시 이야기해요.</p>
+    <div class="field"><span>얼마나 쉴까요</span>
+      <div class="seg4">${CALM_MINUTES.map(([v, l]) => `<label><input type="radio" name="minutes" value="${v}" ${v === 20 ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+    </div>
+    <label class="field"><span>한마디 <small>선택</small></span><textarea name="message" id="calm-msg" rows="2" maxlength="200" placeholder="예: 잠깐 쉬고 이따 꼭 다시 얘기하자"></textarea></label>
+    <button type="submit" class="btn calm-send wide">진정 요청 보내기</button>
+    <p class="hint">다툴 때 심장이 빨리 뛰면 최소 20분은 쉬고 다시 이야기하는 게 좋다고 해요.</p>
+  </form>`;
+  document.body.appendChild(wrap);
+  const form = wrap.querySelector('form');
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
+  wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  requestAnimationFrame(() => wrap.classList.add('open'));
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      const s = await store.startCalm({ minutes: Number(form.elements.minutes.value), message: form.elements.message.value.trim() || null });
+      store.callFn({ action: 'calm', event: 'start', session_id: s.id }).catch(() => {});
+      state.calmHidden = null;
+      close(); render();
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  });
+}
+
+function calmMarkup(s) {
+  const me = store.me;
+  const sender = member(s.from_member);
+  const iSent = s.from_member === me.id;
+  const other = iSent ? partner() : sender;
+  const done = calmDone(s);
+  const endAt = fromMinKst(s.ends_at);
+  const title = iSent
+    ? `${esc(other?.name ?? '상대')}에게 진정 요청을 보냈어요`
+    : `${esc(ga(sender?.name ?? '상대'))} 잠시 진정하자고 해요`;
+  const status = s.accepted_at
+    ? (iSent ? `${esc(ga(other?.name ?? '상대'))} 진정하기로 했어요` : '진정하기로 했어요. 고마워요.')
+    : (iSent ? `아직 ${esc(ga(other?.name ?? '상대'))} 확인하기 전이에요` : '');
+  const actions = [];
+  if (!iSent && !s.accepted_at && !done) actions.push('<button class="btn calm-primary wide" data-calm="accept">나도 진정할게</button>');
+  if (done) actions.push('<button class="btn calm-primary wide" data-calm="end">다시 이야기할 준비됐어</button>');
+  actions.push('<button class="btn calm-quiet wide" data-calm="hide">잠깐 닫기</button>');
+  return `
+  <div class="calm-inner">
+    <p class="calm-kicker">진정 시간</p>
+    <h2 id="calm-title">${title}</h2>
+    ${s.message ? `<blockquote class="calm-msg">${esc(s.message)}</blockquote>` : ''}
+    <div class="breath ${done ? 'rest' : ''}" aria-hidden="true">
+      <span class="breath-glow"></span>
+      <span class="breath-core"><span class="b-in">들이쉬고</span><span class="b-out">내쉬고</span><span class="b-done">충분히<br>쉬었어요</span></span>
+    </div>
+    <p class="breath-guide">${done ? '시간이 다 됐어요. 준비되면 차분하게 이야기해요.' : '4초 들이쉬고, 6초 천천히 내쉬어요'}</p>
+    <p class="calm-left">${done ? `${endAt}에 끝났어요` : `<b data-calm-left>${calmLeft(s)}</b> 남음 · ${endAt}에 다시 이야기해요`}</p>
+    ${status ? `<p class="calm-status">${status}</p>` : ''}
+    <div class="calm-actions">${actions.join('')}</div>
+    ${done ? '' : '<button class="calm-end-early" data-calm="end">지금 끝내기</button>'}
+    <p class="calm-tip">지금은 누가 옳은지 따지기보다 몸을 가라앉힐 시간이에요. 걷기, 음악, 물 한 잔도 좋아요.</p>
+  </div>`;
+}
+
+// ISO 시각 → 한국 시각 "HH:MM"
+function fromMinKst(iso) {
+  const k = nowKST(Date.parse(iso));
+  return `${String(Math.floor(k.min / 60)).padStart(2, '0')}:${String(k.min % 60).padStart(2, '0')}`;
+}
+
+function renderCalm() {
+  const s = activeCalm();
+  let el = document.getElementById('calm');
+  // 상대가 끝내서 사라진 경우 알려 주기
+  if (!s && lastCalmId && !calmEndedByMe) toast('진정 시간이 끝났어요. 차분하게 이야기해요');
+  lastCalmId = s?.id ?? null;
+  calmEndedByMe = false;
+
+  if (!s) { el?.remove(); clearInterval(calmTimer); calmTimer = null; document.documentElement.classList.remove('calm-lock'); return; }
+
+  if (state.calmHidden === s.id) { el?.remove(); document.documentElement.classList.remove('calm-lock'); }
+  else {
+    const sig = `${s.id}|${s.accepted_at}|${calmDone(s)}|${store.me.id}`;
+    if (!el || el.dataset.sig !== sig) {
+      const fresh = !el;
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'calm';
+        el.className = 'calm';
+        el.setAttribute('role', 'dialog');
+        el.setAttribute('aria-modal', 'true');
+        el.setAttribute('aria-labelledby', 'calm-title');
+        el.addEventListener('click', onCalmClick);
+        document.body.appendChild(el);
+      }
+      el.dataset.sig = sig;
+      el.innerHTML = calmMarkup(s);
+      if (fresh) el.querySelector('.calm-primary, .calm-quiet')?.focus();
+    }
+    document.documentElement.classList.add('calm-lock');
+  }
+
+  // 남은 시간 1초마다 갱신, 끝나는 순간 화면 전환
+  if (!calmTimer) {
+    let wasDone = calmDone(s);
+    calmTimer = setInterval(() => {
+      const cur = activeCalm();
+      if (!cur) { renderCalm(); return; }
+      document.querySelectorAll('[data-calm-left]').forEach((n) => { n.textContent = calmLeft(cur); });
+      const d = calmDone(cur);
+      if (d !== wasDone) { wasDone = d; render(); }
+    }, 1000);
+  }
+}
+
+async function onCalmClick(e) {
+  const b = e.target.closest('[data-calm]');
+  if (!b) return;
+  const s = activeCalm();
+  if (!s) return;
+  try {
+    if (b.dataset.calm === 'hide') { state.calmHidden = s.id; render(); }
+    else if (b.dataset.calm === 'accept') {
+      b.disabled = true;
+      await store.acceptCalm(s.id);
+      store.callFn({ action: 'calm', event: 'accept', session_id: s.id }).catch(() => {});
+      render();
+    } else if (b.dataset.calm === 'end') {
+      b.disabled = true;
+      calmEndedByMe = true;
+      await store.endCalm(s.id);
+      store.callFn({ action: 'calm', event: 'end', session_id: s.id }).catch(() => {});
+      render();
+      toast('진정 시간을 마쳤어요. 차분하게 이야기해요');
+    }
+  } catch (err) { calmEndedByMe = false; b.disabled = false; toast(err.message); }
 }
 
 function updateBadge() {
@@ -661,6 +844,8 @@ $app.addEventListener('click', async (e) => {
       if (done) handleLevelUps(before);
     }
     else if (act === 'lvwho') { state.lvWho = el.dataset.v; render(); }
+    else if (act === 'calm-open') openCalmSheet();
+    else if (act === 'calm-show') { state.calmHidden = null; render(); }
     else if (act === 'reward-add') openRewardSheet(null, state.lvWho ?? store.me.id);
     else if (act === 'reward-edit') openRewardSheet(store.rewards.find((r) => r.id === el.dataset.id));
     else if (act === 'claim') {
