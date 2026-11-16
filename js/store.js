@@ -11,6 +11,7 @@ class SupabaseStore {
   me = null; members = []; items = []; completions = [];
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;   // 진행 중인 진정하기 (없으면 null)
+  moods = [];    // 하루 감정 기록 (최근 120일)
   #sb; #listeners = []; #channel = null;
 
   async init() {
@@ -58,17 +59,19 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest, calm] = await Promise.all([
+    const [m, items, comps, quest, calm, moods] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
       this.#loadQuest(),
       this.#sb.from('calm_sessions').select('*').is('ended_at', null).order('started_at', { ascending: false }).limit(1),
+      this.#all(() => this.#sb.from('moods').select('*').gte('day', since).order('day').order('member_id')).catch(() => []),
     ]);
     if (m.error) throw new Error(m.error.message);
     this.members = m.data; this.items = items; this.completions = comps;
     Object.assign(this, quest);
     this.calm = calm.error ? null : calm.data[0] ?? null;
+    this.moods = moods;
     if (this.me) this.me = this.members.find((x) => x.id === this.me.id);
   }
 
@@ -95,6 +98,7 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'xp_log' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'calm_sessions' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'moods' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -175,6 +179,19 @@ class SupabaseStore {
     await this.load();
   }
 
+  // 하루 감정 기록 (같은 날은 덮어씀)
+  async saveMood({ day, emoji, scores, note, shared }) {
+    const { error } = await this.#sb.from('moods')
+      .upsert({ member_id: this.me.id, day, emoji, scores, note, shared }, { onConflict: 'member_id,day' });
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async deleteMood(day) {
+    const { error } = await this.#sb.from('moods').delete().eq('member_id', this.me.id).eq('day', day);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+
   async savePush(sub) {
     const { error } = await this.#sb.from('push_subs').upsert({ ...sub, member_id: this.me.id });
     if (error) throw new Error(error.message);
@@ -244,7 +261,32 @@ function seed() {
     rw('m2', 6, '네일 받기', 'm1'),
     rw('m2', 12, '오마카세 디너', 'm1'),
   ];
-  return { members, items, completions, xp_log, rewards, meId: 'm1' };
+  return { members, items, completions, xp_log, rewards, moods: seedMoods(), meId: 'm1' };
+}
+
+// 예시 감정 기록 30일 (항상 같은 값이 나오도록 고정 난수)
+function seedMoods() {
+  const d = nowKST().date;
+  let s = 42;
+  const rnd = () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const clamp = (v) => Math.max(0, Math.min(10, Math.round(v)));
+  const notes = ['산책하면서 이야기 많이 함', '회의가 길어서 지침', '맛있는 저녁 먹음', '청첩장 일정 때문에 조금 초조', '푹 잤음',
+    '야근', '친구들 만나서 즐거웠음', '사소한 걸로 다퉜다가 화해', '운동하고 개운함', ''];
+  const out = [];
+  for (const [mid, base] of [['m1', { joy: 6, calm: 5, love: 7, sad: 3, anxious: 4, angry: 3 }], ['m2', { joy: 7, calm: 6, love: 8, sad: 2, anxious: 3, angry: 2 }]]) {
+    const cur = { ...base };
+    for (let k = 29; k >= 0; k--) {
+      const day = addDays(d, -k);
+      if (mid === 'm1' && k === 0) continue;   // 종원은 오늘 아직 기록 전
+      if (rnd() < 0.14) continue;               // 가끔 빠진 날
+      for (const key of Object.keys(cur)) cur[key] = Math.max(0, Math.min(10, cur[key] + (rnd() - 0.5) * 3 + (base[key] - cur[key]) * 0.3));
+      const scores = Object.fromEntries(Object.entries(cur).map(([key, v]) => [key, clamp(v)]));
+      const good = scores.joy + scores.calm + scores.love - scores.sad - scores.anxious - scores.angry;
+      const emoji = good > 12 ? (scores.love >= 8 ? '🥰' : '😆') : good > 6 ? '😊' : good > 2 ? '😌' : good > -2 ? '😐' : scores.angry >= 6 ? '😡' : scores.anxious >= 6 ? '😰' : '😔';
+      out.push({ member_id: mid, day, emoji, scores, note: notes[Math.floor(rnd() * notes.length)] || null, shared: true });
+    }
+  }
+  return out;
 }
 
 class DemoStore {
@@ -252,6 +294,7 @@ class DemoStore {
   me = null; members = []; items = []; completions = [];
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;
+  moods = [];
   #db; #listeners = [];
 
   #read() {
@@ -267,6 +310,8 @@ class DemoStore {
     this.xpLog = [...this.#db.xp_log].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100);
     this.rewards = [...this.#db.rewards].sort((a, b) => a.level - b.level);
     this.calm = this.#db.calm && !this.#db.calm.ended_at ? this.#db.calm : null;
+    if (!this.#db.moods) this.#db.moods = seedMoods();   // 예전 데모 데이터에 감정 기록 추가
+    this.moods = this.#db.moods.filter((x) => x.member_id === this.me.id || x.shared);
   }
 
   async init() { this.#db = this.#read(); this.#sync(); return { needLogin: false }; }
@@ -322,6 +367,15 @@ class DemoStore {
       ends_at: new Date(now + minutes * 60000).toISOString(), accepted_at: null, ended_at: null, ended_by: null };
     this.#write(); this.#sync();
     return this.#db.calm;
+  }
+  async saveMood({ day, emoji, scores, note, shared }) {
+    this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#db.moods.push({ member_id: this.me.id, day, emoji, scores, note, shared });
+    this.#write(); this.#sync();
+  }
+  async deleteMood(day) {
+    this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#write(); this.#sync();
   }
   async acceptCalm() { this.#db.calm.accepted_at = new Date().toISOString(); this.#write(); this.#sync(); }
   async endCalm() { Object.assign(this.#db.calm, { ended_at: new Date().toISOString(), ended_by: this.me.id }); this.#write(); this.#sync(); }
