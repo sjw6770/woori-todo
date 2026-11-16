@@ -12,6 +12,7 @@ class SupabaseStore {
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;   // 진행 중인 진정하기 (없으면 null)
   moods = [];    // 하루 감정 기록 (최근 120일)
+  places = [];   // 갈 곳 목록 (카카오 장소는 id·검색어만 있음 → 화면에서 실시간 조회)
   #sb; #listeners = []; #channel = null;
 
   async init() {
@@ -59,14 +60,16 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest, calm, moods] = await Promise.all([
+    const [m, items, comps, quest, calm, moods, places] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
       this.#loadQuest(),
       this.#sb.from('calm_sessions').select('*').is('ended_at', null).order('started_at', { ascending: false }).limit(1),
       this.#all(() => this.#sb.from('moods').select('*').gte('day', since).order('day').order('member_id')).catch(() => []),
+      this.#all(() => this.#sb.from('places').select('*').order('created_at', { ascending: false }).order('id')).catch(() => []),
     ]);
+    this.places = places;
     if (m.error) throw new Error(m.error.message);
     this.members = m.data; this.items = items; this.completions = comps;
     Object.assign(this, quest);
@@ -99,6 +102,7 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rewards' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'calm_sessions' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'moods' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'places' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -192,6 +196,36 @@ class SupabaseStore {
     await this.load();
   }
 
+  // 갈 곳
+  async searchPlaces(query) { return this.callFn({ action: 'place-search', query }); }
+  async lookupPlaces(list) { return (await this.callFn({ action: 'place-lookup', places: list })).info ?? {}; }
+  async addPlace(r, query) {
+    // 카카오 결과는 정책상 ID + 사용자가 입력한 검색어만 저장
+    const row = r.source === 'kakao'
+      ? { source: 'kakao', source_id: r.source_id, query }
+      : { source: r.source, source_id: r.source_id, name: r.name, address: r.address, category: r.category || null, lat: r.lat, lng: r.lng, url: r.url };
+    const { data, error } = await this.#sb.from('places').insert(row).select().single();
+    if (error) throw new Error(error.code === '23505' ? '이미 갈 곳에 있어요' : error.message);
+    await this.load();
+    return data;
+  }
+  async addManualPlace({ name, address, memo }) {
+    const { data, error } = await this.#sb.from('places').insert({ source: 'manual', name, address, memo }).select().single();
+    if (error) throw new Error(error.message);
+    await this.load();
+    return data;
+  }
+  async updatePlace(id, patch) {
+    const { error } = await this.#sb.from('places').update(patch).eq('id', id);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async deletePlace(id) {
+    const { error } = await this.#sb.from('places').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+
   async savePush(sub) {
     const { error } = await this.#sb.from('push_subs').upsert({ ...sub, member_id: this.me.id });
     if (error) throw new Error(error.message);
@@ -261,7 +295,7 @@ function seed() {
     rw('m2', 6, '네일 받기', 'm1'),
     rw('m2', 12, '오마카세 디너', 'm1'),
   ];
-  return { members, items, completions, xp_log, rewards, moods: seedMoods(), meId: 'm1' };
+  return { members, items, completions, xp_log, rewards, moods: seedMoods(), places: seedPlaces(), meId: 'm1' };
 }
 
 // 예시 감정 기록 30일 (항상 같은 값이 나오도록 고정 난수)
@@ -289,12 +323,39 @@ function seedMoods() {
   return out;
 }
 
+// 데모용 예시 장소 (실제 앱은 카카오/OpenStreetMap 검색)
+const DEMO_PLACES = [
+  ['남산서울타워', '관광명소', '서울 용산구 남산공원길 105', 37.5512, 126.9882],
+  ['해방촌 신흥시장', '시장', '서울 용산구 신흥로 95-9', 37.5446, 126.9853],
+  ['어니언 성수', '카페', '서울 성동구 아차산로9길 8', 37.5446, 127.0581],
+  ['서울숲', '공원', '서울 성동구 뚝섬로 273', 37.5444, 127.0374],
+  ['국립중앙박물관', '박물관', '서울 용산구 서빙고로 137', 37.5239, 126.9803],
+  ['경복궁', '관광명소', '서울 종로구 사직로 161', 37.5796, 126.9770],
+  ['익선동 한옥거리', '관광명소', '서울 종로구 익선동', 37.5742, 126.9897],
+  ['성수 연무장길 카페거리', '카페거리', '서울 성동구 연무장길', 37.5427, 127.0560],
+  ['해방촌 오거리 루프탑', '술집', '서울 용산구 신흥로 20', 37.5432, 126.9862],
+  ['반포 한강공원', '공원', '서울 서초구 신반포로11길 40', 37.5100, 126.9958],
+].map(([name, category, address, lat, lng], i) => ({
+  source: 'osm', source_id: `demo/${i}`, name, category, address, lat, lng,
+  url: `https://map.kakao.com/?q=${encodeURIComponent(name)}`,
+}));
+
+function seedPlaces() {
+  const now = Date.now();
+  return [DEMO_PLACES[2], DEMO_PLACES[4], DEMO_PLACES[9], DEMO_PLACES[0]].map((r, i) => ({
+    id: uid(), ...r, query: null, memo: ['웨이팅 길다고 함, 평일 오전 추천', '특별전 12월까지', '자전거 빌려서 피크닉', null][i],
+    visited_at: i === 3 ? new Date(now - 9 * 86400000).toISOString() : null,
+    added_by: i % 2 ? 'm2' : 'm1', created_at: new Date(now - (i + 1) * 86400000).toISOString(),
+  }));
+}
+
 class DemoStore {
   demo = true;
   me = null; members = []; items = []; completions = [];
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;
   moods = [];
+  places = [];
   #db; #listeners = [];
 
   #read() {
@@ -312,6 +373,8 @@ class DemoStore {
     this.calm = this.#db.calm && !this.#db.calm.ended_at ? this.#db.calm : null;
     if (!this.#db.moods) this.#db.moods = seedMoods();   // 예전 데모 데이터에 감정 기록 추가
     this.moods = this.#db.moods.filter((x) => x.member_id === this.me.id || x.shared);
+    if (!this.#db.places) this.#db.places = seedPlaces();
+    this.places = [...this.#db.places].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
   async init() { this.#db = this.#read(); this.#sync(); return { needLogin: false }; }
@@ -375,6 +438,32 @@ class DemoStore {
   }
   async deleteMood(day) {
     this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#write(); this.#sync();
+  }
+  // 데모 검색: 예시 장소 목록에서 찾음
+  async searchPlaces(query) {
+    const words = query.trim().split(/\s+/).filter(Boolean);
+    const hit = DEMO_PLACES.filter((p) => words.every((w) => `${p.name} ${p.category} ${p.address}`.includes(w)));
+    return { provider: 'demo', results: hit.slice(0, 10) };
+  }
+  async lookupPlaces() { return {}; }
+  async addPlace(r) {
+    if (this.#db.places.some((p) => p.source === r.source && p.source_id === r.source_id)) throw new Error('이미 갈 곳에 있어요');
+    const p = { id: uid(), source: r.source, source_id: r.source_id, query: null, name: r.name, address: r.address, category: r.category,
+      lat: r.lat, lng: r.lng, url: r.url, memo: null, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
+    this.#db.places.push(p); this.#write(); this.#sync();
+    return p;
+  }
+  async addManualPlace({ name, address, memo }) {
+    const p = { id: uid(), source: 'manual', source_id: null, query: null, name, address, category: null, lat: null, lng: null, url: null,
+      memo, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
+    this.#db.places.push(p); this.#write(); this.#sync();
+    return p;
+  }
+  async updatePlace(id, patch) { Object.assign(this.#db.places.find((p) => p.id === id), patch); this.#write(); this.#sync(); }
+  async deletePlace(id) {
+    this.#db.places = this.#db.places.filter((p) => p.id !== id);
+    for (const i of this.#db.items) if (i.place_id === id) i.place_id = null;
     this.#write(); this.#sync();
   }
   async acceptCalm() { this.#db.calm.accepted_at = new Date().toISOString(); this.#write(); this.#sync(); }

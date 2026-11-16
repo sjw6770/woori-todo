@@ -156,6 +156,20 @@ async function kakaoSearch(q: string) {
   return results.length ? results : await kakaoAddress(q);
 }
 
+// OSM 분류 → 한국어
+const OSM_KO: Record<string, string> = {
+  cafe: "카페", restaurant: "음식점", fast_food: "패스트푸드", bar: "술집", pub: "술집", bakery: "베이커리",
+  ice_cream: "디저트", park: "공원", garden: "정원", museum: "박물관", gallery: "미술관", attraction: "명소",
+  viewpoint: "전망대", tower: "타워", hotel: "숙소", guest_house: "숙소", motel: "숙소", cinema: "영화관",
+  theatre: "공연장", mall: "쇼핑몰", department_store: "백화점", supermarket: "마트", convenience: "편의점",
+  marketplace: "시장", palace: "궁궐", castle: "성", monument: "기념물", memorial: "기념물", zoo: "동물원",
+  aquarium: "아쿠아리움", theme_park: "테마파크", beach: "해변", peak: "산", station: "역", hospital: "병원",
+  library: "도서관", university: "대학교", school: "학교", place_of_worship: "종교시설", hairdresser: "미용실",
+  clothes: "옷가게", books: "서점", street: "길", residential: "길", tertiary: "길", secondary: "길", primary: "길",
+  city: "도시", town: "읍", village: "마을", suburb: "동네", neighbourhood: "동네", quarter: "동네",
+};
+const osmKo = (v?: string, k?: string) => OSM_KO[v ?? ""] ?? OSM_KO[k ?? ""] ?? (v && v !== "yes" ? v : k ?? "");
+
 // OpenStreetMap 검색 (키 불필요). Photon(komoot) 먼저, 안 되면 Nominatim.
 const OSM_UA = "woori-todo/1.0 (personal couple app; https://github.com/sjw6770/woori-todo)";
 async function osmSearch(q: string): Promise<PlaceResult[]> {
@@ -175,8 +189,8 @@ async function photonSearch(q: string): Promise<PlaceResult[]> {
     const p = f.properties;
     const t = { N: "node", W: "way", R: "relation" }[p.osm_type as string] ?? "node";
     return {
-      source: "osm", source_id: `${t}/${p.osm_id}`, name: p.name,
-      category: p.osm_value && p.osm_value !== "yes" ? p.osm_value : p.osm_key ?? "",
+      source: "osm", source_id: `${t}/${p.osm_id}`, name: String(p.name).replace(/[,\s]+$/, ""),
+      category: osmKo(p.osm_value, p.osm_key),
       address: [p.state, p.city, p.county, p.district, p.locality, p.street, p.housenumber].filter(Boolean)
         .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join(" "),
       lat: Number(f.geometry.coordinates[1]), lng: Number(f.geometry.coordinates[0]),
@@ -193,7 +207,7 @@ async function nominatimSearch(q: string): Promise<PlaceResult[]> {
   // deno-lint-ignore no-explicit-any
   return (await res.json()).map((r: any): PlaceResult => ({
     source: "osm", source_id: `${r.osm_type}/${r.osm_id}`,
-    name: r.name || String(r.display_name).split(",")[0], category: r.type && r.type !== "yes" ? r.type : r.category ?? "",
+    name: r.name || String(r.display_name).split(",")[0], category: osmKo(r.type, r.category),
     address: String(r.display_name).split(",").map((s: string) => s.trim()).reverse().filter((s: string) => s !== "대한민국" && !/^\d{5}$/.test(s)).join(" "),
     lat: Number(r.lat), lng: Number(r.lon), url: `https://www.openstreetmap.org/${r.osm_type}/${r.osm_id}`,
   }));

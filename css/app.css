@@ -519,3 +519,66 @@ html.calm-lock body { overflow: hidden; }
 .switch { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-weight: 600; font-size: 15px; }
 .switch input { width: 20px; height: 20px; accent-color: var(--ink); margin: 0; }
 .linkbtn.more { display: block; margin: 8px auto 0; }
+
+/* =====================================================================
+   갈 곳
+   ===================================================================== */
+.uptabs { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; background: var(--field); border-radius: 12px; padding: 3px; margin: 4px 0 6px; }
+.uptabs button { padding: 9px 6px; border-radius: 9px; font-size: 15px; font-weight: 700; color: var(--muted); display: inline-flex; justify-content: center; align-items: center; gap: 6px; }
+.uptabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.uptabs b { font-size: 12px; min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--ink); color: var(--on-ink); }
+
+.psearch { display: flex; gap: 8px; margin-top: 14px; }
+.psearch-in { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.psearch-in:focus-within { border-color: var(--strong-line); }
+.psearch-in svg { color: var(--muted); font-size: 18px; flex: none; }
+.psearch-in input { flex: 1; min-width: 0; border: 0; background: none; font-size: 16px; padding: 12px 0; outline: none; -webkit-appearance: none; appearance: none; }
+.psearch .btn { flex: none; }
+.psearch-hint { margin: 8px 4px 0; }
+
+.presults li { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
+.presults li + li { border-top: 1px solid var(--line); }
+.pr-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pr-body b { font-weight: 700; overflow-wrap: anywhere; }
+.pr-body small { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.pr-map { flex: none; font-size: 13px; font-weight: 600; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; padding: 6px 2px; }
+.pr-add { flex: none; padding: 7px 14px; border-radius: 999px; background: var(--ink); color: var(--on-ink); font-size: 14px; font-weight: 800; }
+.pr-added { flex: none; font-size: 13px; font-weight: 700; color: var(--shared); padding: 7px 4px; }
+.attrib { margin: 6px 4px 0; font-size: 11.5px; color: var(--muted); text-align: right; }
+.linkbtn.manual { display: block; margin: 14px auto 0; font-size: 14px; }
+
+.plist li { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.plist li + li { border-top: 1px solid var(--line); }
+.pl-body { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.pl-body b { font-weight: 700; overflow-wrap: anywhere; }
+.pl-body small { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.pl-memo { font-size: 14px; overflow-wrap: anywhere; }
+.pl-meta { font-size: 12px; color: var(--muted); }
+.pl-plan { flex: none; padding: 7px 12px; border-radius: 999px; font-size: 13px; font-weight: 800; background: var(--field); }
+.places .chips { margin-top: 0; margin-bottom: 10px; }
+
+/* 할일/약속 시트의 장소 고르기 */
+.place-pick { display: flex; flex-direction: column; gap: 8px; }
+.pp-sel { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--field); }
+.pp-sel > svg { font-size: 18px; color: var(--shared); flex: none; }
+.pp-sel span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pp-sel small { font-size: 12px; color: var(--muted); }
+.pp-x { width: 32px; height: 32px; border-radius: 50%; font-size: 20px; color: var(--muted); flex: none; }
+.pp-recs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.pp-recs::-webkit-scrollbar { display: none; }
+.pp-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px; border-radius: 999px; font-size: 14px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-chip svg { color: var(--shared); flex: none; }
+.pp-chip.visited { color: var(--muted); }
+.pp-chip.visited svg { color: var(--muted); }
+
+/* 장소 시트 머리 */
+.place-head { margin-top: 12px; display: flex; flex-direction: column; gap: 3px; }
+.place-head p { margin: 0; }
+.ph-name { font-size: 22px; font-weight: 800; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.ph-sub { font-size: 14px; color: var(--muted); }
+.ph-map { display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--shared); width: fit-content; }
+.place-head + .field { margin-top: 16px; }
+.sheet .btn.primary.wide { margin-top: 18px; }
+
+/* 할일 행의 장소 */
+.meta .place svg { color: var(--shared); }

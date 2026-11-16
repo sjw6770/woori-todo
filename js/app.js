@@ -22,6 +22,8 @@ const state = {
   moodWho: null,           // 감정 화면에서 보고 있는 사람 (null = 나)
   moodRange: 7,            // 그래프 기간 7 | 30
   moodKeys: ['joy', 'sad'],// 그래프에 보이는 감정
+  upTab: 'list',           // 일정 탭: list | places
+  placeQuery: '', placeResults: null, placeSearching: false, placeFilter: 'want',
 };
 
 // ------------------------------------------------------------------ 유틸
@@ -78,6 +80,8 @@ const sortByTime = (a, b) => (toMin(a.time) ?? 2000) - (toMin(b.time) ?? 2000) |
 // ------------------------------------------------------------------ 행 렌더링
 const ICON = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 1113 0c0 4.8-6.5 11-6.5 11z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.3" fill="currentColor"/></svg>',
+  search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
   breath: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="currentColor"/><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8" opacity=".55"/></svg>',
   bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 1112 0v5l1.5 2h-15zM10 20a2 2 0 004 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
   repeat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11V9a3 3 0 013-3h11l-3-3M20 13v2a3 3 0 01-3 3H6l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -96,6 +100,8 @@ function row(item, date, { showDate = false } = {}) {
   const rl = repeatLabel(item);
   if (rl) meta.push(`<span class="ico">${ICON.repeat}${rl}</span>`);
   if (item.remind_before != null && item.time) meta.push(`<span class="ico">${ICON.bell}${remindText(item)}</span>`);
+  const place = item.place_id ? store.places.find((p) => p.id === item.place_id) : null;
+  if (place) meta.push(`<span class="ico place">${ICON.pin}${esc(placeLabel(place))}</span>`);
   if (item.note) meta.push(`<span class="note">${esc(item.note)}</span>`);
   const diff = DIFF[item.difficulty] ? item.difficulty : 'normal';
   const xp = item.kind === 'task'
@@ -636,7 +642,15 @@ function handleLevelUps(before) {
 }
 
 // ------------------------------------------------------------------ 다가오는 일정
+// 일정 탭 위쪽: 다가오는 일정 | 갈 곳
+const upTabs = () => `
+  <div class="uptabs" role="tablist">
+    <button role="tab" data-act="uptab" data-v="list" aria-selected="${state.upTab !== 'places'}">다가오는 일정</button>
+    <button role="tab" data-act="uptab" data-v="places" aria-selected="${state.upTab === 'places'}">갈 곳${store.places.filter((p) => !p.visited_at).length ? ` <b>${store.places.filter((p) => !p.visited_at).length}</b>` : ''}</button>
+  </div>`;
+
 function upcomingView() {
+  if (state.upTab === 'places') return placesView();
   const start = today();
   const days = [];
   for (let k = 0; k < 30; k++) {
@@ -645,6 +659,7 @@ function upcomingView() {
     if (list.length) days.push({ d, list });
   }
   return `
+  ${upTabs()}
   <header class="top"><h1 class="plain">다가오는 일정</h1><p class="sub">앞으로 30일 · 매일 반복은 오늘 화면에서 보여요</p></header>
   ${filterChips()}
   <main class="lists">
@@ -652,6 +667,187 @@ function upcomingView() {
       <section><h2>${relDay(d) ? `${relDay(d)} ` : ''}<span>${longDate(d)}</span></h2><ul>${list.map((i) => row(i, d)).join('')}</ul></section>`).join('')
       : '<p class="empty">앞으로 30일 동안 잡힌 일정이 없어요.</p>'}
   </main>`;
+}
+
+// ------------------------------------------------------------------ 갈 곳
+// 카카오 장소는 정책상 ID + 검색어만 저장하므로, 이름·주소는 앱이 열려 있는 동안 실시간 조회해서 메모리에만 둠
+const placeInfo = new Map();   // place.id → 조회 결과 | null
+const placePending = new Set();
+const PROVIDER_NOTE = { kakao: '검색: 카카오맵', osm: '검색 결과 © OpenStreetMap 기여자', demo: '데모 예시 장소' };
+
+const kinfo = (p) => (p.source === 'kakao' ? placeInfo.get(p.id) : null);
+function placeLabel(p) { return p.source === 'kakao' ? kinfo(p)?.name ?? p.query : p.name; }
+function placeSub(p) {
+  const i = p.source === 'kakao' ? kinfo(p) : p;
+  if (!i) return p.source === 'kakao' && placeInfo.has(p.id) ? '정보를 불러오지 못했어요' : '';
+  return [i.category, i.address].filter(Boolean).join(' · ');
+}
+function placeUrl(p) {
+  if (p.source === 'kakao') return kinfo(p)?.url ?? `https://map.kakao.com/?q=${encodeURIComponent(p.query)}`;
+  return p.url ?? `https://map.kakao.com/?q=${encodeURIComponent(`${p.name} ${p.address ?? ''}`.trim())}`;
+}
+
+async function ensurePlaceInfo() {
+  if (store.demo) return;
+  const need = store.places.filter((p) => p.source === 'kakao' && !placeInfo.has(p.id) && !placePending.has(p.id));
+  if (!need.length) return;
+  need.forEach((p) => placePending.add(p.id));
+  try {
+    const info = await store.lookupPlaces(need.map((p) => ({ id: p.id, source_id: p.source_id, query: p.query })));
+    need.forEach((p) => placeInfo.set(p.id, info[p.id] ?? null));
+  } catch { need.forEach((p) => placeInfo.set(p.id, null)); }
+  need.forEach((p) => placePending.delete(p.id));
+  render();
+}
+
+function placesView() {
+  const want = store.places.filter((p) => !p.visited_at);
+  const been = store.places.filter((p) => p.visited_at);
+  const list = state.placeFilter === 'visited' ? been : want;
+  const r = state.placeResults;
+  const added = (x) => store.places.some((p) => p.source === x.source && p.source_id && p.source_id === x.source_id);
+  const results = state.placeSearching
+    ? '<p class="empty">찾는 중…</p>'
+    : r == null ? ''
+    : r.error ? `<p class="empty">${esc(r.error)}</p>`
+    : r.results.length ? `
+      <ul class="presults">${r.results.map((x, i) => `
+        <li>
+          <span class="pr-body"><b>${esc(x.name)}</b><small>${esc([x.category, x.address].filter(Boolean).join(' · '))}</small></span>
+          <a class="pr-map" href="${esc(x.url)}" target="_blank" rel="noopener">지도</a>
+          ${added(x) ? '<span class="pr-added">추가됨</span>' : `<button class="pr-add" data-act="place-add" data-i="${i}">추가</button>`}
+        </li>`).join('')}</ul>
+      <p class="attrib">${PROVIDER_NOTE[r.provider] ?? ''}</p>`
+    : `<p class="empty">찾는 곳이 없어요. 다른 검색어로 찾아보거나 직접 추가해 보세요.</p>`;
+
+  return `
+  ${upTabs()}
+  <header class="top"><h1 class="plain">갈 곳</h1><p class="sub">가고 싶은 가게·장소를 모아 두고, 일정을 잡을 때 골라요</p></header>
+  <form class="psearch" data-psearch role="search">
+    <label class="psearch-in">${ICON.search}<input type="search" name="q" id="place-q" enterkeyhint="search" autocomplete="off" maxlength="100"
+      placeholder="가게 이름, 동네+업종, 주소" value="${esc(state.placeQuery ?? '')}" aria-label="장소 검색"></label>
+    <button class="btn primary" type="submit">검색</button>
+  </form>
+  ${r == null && !state.placeSearching ? '<p class="hint psearch-hint">예: 성수 카페, 해방촌 맛집, 남산서울타워, 용산구 신흥로 95</p>' : ''}
+  <main class="lists places">
+    ${results ? `<section>${r && !state.placeSearching && !r.error ? `<h2>검색 결과 <span>${r.results.length}곳</span><button class="linkbtn h2btn" data-act="place-clear">닫기</button></h2>` : ''}${results}</section>` : ''}
+    <button class="linkbtn manual" data-act="place-manual">찾는 곳이 없나요? 직접 추가</button>
+
+    <section>
+      <div class="chips" role="tablist">
+        <button role="tab" data-act="place-filter" data-v="want" aria-selected="${state.placeFilter !== 'visited'}">가고 싶은 곳 ${want.length}</button>
+        <button role="tab" data-act="place-filter" data-v="visited" aria-selected="${state.placeFilter === 'visited'}">다녀온 곳 ${been.length}</button>
+      </div>
+      ${list.length ? `<ul class="plist">${list.map((p) => {
+        const plans = store.items.filter((i) => i.place_id === p.id && i.start_date >= today()).length;
+        const by = member(p.added_by);
+        return `
+        <li>
+          <button class="pl-body" data-act="place-open" data-id="${p.id}">
+            <b>${esc(placeLabel(p))}</b>
+            ${placeSub(p) ? `<small>${esc(placeSub(p))}</small>` : ''}
+            ${p.memo ? `<span class="pl-memo">${esc(p.memo)}</span>` : ''}
+            <span class="pl-meta">${by ? `${esc(ga(by.name))} 추가` : ''}${plans ? ` · 잡힌 일정 ${plans}개` : ''}${p.visited_at ? ` · ${md(nowKST(Date.parse(p.visited_at)).date)} 다녀옴` : ''}</span>
+          </button>
+          ${p.visited_at ? '' : `<button class="pl-plan" data-act="place-plan" data-id="${p.id}">일정 잡기</button>`}
+        </li>`;
+      }).join('')}</ul>`
+      : `<p class="empty">${state.placeFilter === 'visited' ? '다녀온 곳이 아직 없어요.' : '검색해서 가고 싶은 곳을 추가해 보세요.'}</p>`}
+    </section>
+  </main>`;
+}
+
+// 장소 시트: 메모, 다녀옴, 일정 잡기, 지도, 삭제
+function openPlaceSheet(p) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  wrap.innerHTML = `
+  <div class="scrim" data-close></div>
+  <form class="sheet" role="dialog" aria-modal="true" aria-label="장소">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <button type="button" class="linkbtn" data-close>취소</button>
+      <h2 class="sheet-title">갈 곳</h2>
+      <button type="submit" class="linkbtn strong">저장</button>
+    </div>
+    <div class="place-head">
+      <p class="ph-name">${esc(placeLabel(p))}</p>
+      ${placeSub(p) ? `<p class="ph-sub">${esc(placeSub(p))}</p>` : ''}
+      ${kinfo(p)?.phone ? `<p class="ph-sub">${esc(kinfo(p).phone)}</p>` : ''}
+      <a class="ph-map" href="${esc(placeUrl(p))}" target="_blank" rel="noopener">${ICON.pin}지도에서 보기</a>
+    </div>
+    <label class="field"><span>메모</span><textarea name="memo" id="place-memo" rows="2" maxlength="300" placeholder="예: 웨이팅 길다고 함, 평일 오전 추천">${esc(p.memo ?? '')}</textarea></label>
+    <label class="switch"><input type="checkbox" name="visited" id="place-visited" ${p.visited_at ? 'checked' : ''}><span>다녀왔어요</span></label>
+    <button type="button" class="btn primary wide" data-plan>이 장소로 일정 잡기</button>
+    <button type="button" class="btn danger" data-del>갈 곳에서 삭제</button>
+  </form>`;
+  document.body.appendChild(wrap);
+  const form = wrap.querySelector('form');
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
+  wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  requestAnimationFrame(() => wrap.classList.add('open'));
+  form.querySelector('[data-plan]').addEventListener('click', () => { close(); openSheet(null, { kind: 'event', place_id: p.id, title: placeLabel(p), start_date: today() }); });
+  const del = form.querySelector('[data-del]');
+  del.addEventListener('click', async () => {
+    if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = '한 번 더 누르면 삭제돼요'; return; }
+    try { await store.deletePlace(p.id); close(); render(); toast('갈 곳에서 삭제했어요'); } catch (e) { toast(e.message); }
+  });
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const visited = form.elements.visited.checked;
+    try {
+      await store.updatePlace(p.id, { memo: form.elements.memo.value.trim() || null, visited_at: visited ? p.visited_at ?? new Date().toISOString() : null });
+      close(); render(); toast('저장했어요');
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// 직접 추가
+function openManualPlaceSheet() {
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  wrap.innerHTML = `
+  <div class="scrim" data-close></div>
+  <form class="sheet" role="dialog" aria-modal="true" aria-label="장소 직접 추가">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <button type="button" class="linkbtn" data-close>취소</button>
+      <h2 class="sheet-title">직접 추가</h2>
+      <button type="submit" class="linkbtn strong">추가</button>
+    </div>
+    <input class="title-in" name="name" id="mp-name" placeholder="장소 이름" maxlength="120" required autocomplete="off" value="${esc(state.placeQuery ?? '')}">
+    <label class="field"><span>주소 <small>선택</small></span><input name="address" id="mp-address" maxlength="200" autocomplete="off" placeholder="예: 서울 용산구 신흥로 95"></label>
+    <label class="field"><span>메모 <small>선택</small></span><textarea name="memo" id="mp-memo" rows="2" maxlength="300"></textarea></label>
+  </form>`;
+  document.body.appendChild(wrap);
+  const form = wrap.querySelector('form');
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
+  wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  requestAnimationFrame(() => wrap.classList.add('open'));
+  setTimeout(() => form.elements.name.focus(), 250);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = form.elements;
+    if (!f.name.value.trim()) return;
+    try {
+      await store.addManualPlace({ name: f.name.value.trim(), address: f.address.value.trim() || null, memo: f.memo.value.trim() || null });
+      state.placeFilter = 'want';
+      close(); render(); toast('갈 곳에 추가했어요');
+    } catch (e) { toast(e.message); }
+  });
+}
+
+async function runPlaceSearch(q) {
+  state.placeQuery = q;
+  state.placeSearching = true; state.placeResults = null; render();
+  try {
+    const r = await store.searchPlaces(q);
+    state.placeResults = { provider: r.provider, results: r.results ?? [], query: q };
+  } catch (e) {
+    state.placeResults = { error: `검색하지 못했어요. 잠시 뒤 다시 해 보세요. (${e.message})`, results: [] };
+  }
+  state.placeSearching = false;
+  render();
 }
 
 // ------------------------------------------------------------------ 설정
@@ -711,7 +907,16 @@ function render() {
   updateBadge();
   if (state.view === 'mood') drawMoodChart();
   renderCalm();
+  ensurePlaceInfo();
 }
+
+// 장소 검색 (폼 제출)
+$app.addEventListener('submit', (e) => {
+  if (!e.target.matches('[data-psearch]')) return;
+  e.preventDefault();
+  const q = e.target.elements.q.value.trim();
+  if (q) { e.target.elements.q.blur(); runPlaceSearch(q); }
+});
 
 // ------------------------------------------------------------------ 진정하기
 // 한 사람이 요청하면 두 사람 화면 모두에 진정 시간이 크게 뜸.
@@ -898,11 +1103,12 @@ function updateBadge() {
 }
 
 // ------------------------------------------------------------------ 추가/수정 시트
-function openSheet(item) {
+function openSheet(item, preset = {}) {
   const isNew = !item;
   const it = item ?? {
     kind: 'task', title: '', note: '', owner: store.me.id, start_date: state.view === 'today' ? state.date : today(),
     time: null, end_date: null, repeat: 'none', weekdays: [], remind_before: null, nag_every: 0, difficulty: 'normal',
+    place_id: null, ...preset,
   };
   const curDiff = DIFF[it.difficulty] ? it.difficulty : 'normal';
   const ownerOpts = [[store.me.id, '나'], ...(partner() ? [[partner().id, partner().name]] : []), ['', '공통']];
@@ -923,6 +1129,11 @@ function openSheet(item) {
       <button type="submit" class="linkbtn strong">${isNew ? '추가' : '저장'}</button>
     </div>
     <input class="title-in" name="title" placeholder="무엇을 할까요?" value="${esc(it.title)}" maxlength="200" required autocomplete="off">
+
+    <div class="field"><span>장소 <small>갈 곳에서 추천</small></span>
+      <input type="hidden" name="place_id" value="${it.place_id ?? ''}">
+      <div class="place-pick" data-place-pick></div>
+    </div>
 
     <div class="field"><span>누구</span>
       <div class="seg3">${ownerOpts.map(([v, l]) => `<label><input type="radio" name="owner" value="${v}" ${(it.owner ?? '') === v ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('')}</div>
@@ -971,6 +1182,27 @@ function openSheet(item) {
   </form>`;
   document.body.appendChild(wrap);
   const form = wrap.querySelector('form');
+
+  // 장소: 고른 장소 표시 + 갈 곳 목록 추천 (아직 안 가 본 곳 먼저)
+  const pickBox = form.querySelector('[data-place-pick]');
+  const drawPick = () => {
+    const sel = store.places.find((p) => p.id === form.elements.place_id.value);
+    const recs = [...store.places].sort((a, b) => Boolean(a.visited_at) - Boolean(b.visited_at)).filter((p) => p.id !== sel?.id).slice(0, 10);
+    pickBox.innerHTML = `
+      ${sel ? `<div class="pp-sel">${ICON.pin}<span><b>${esc(placeLabel(sel))}</b>${placeSub(sel) ? `<small>${esc(placeSub(sel))}</small>` : ''}</span><button type="button" class="pp-x" data-unpick aria-label="장소 빼기">×</button></div>` : ''}
+      ${recs.length ? `<div class="pp-recs">${recs.map((p) => `<button type="button" class="pp-chip ${p.visited_at ? 'visited' : ''}" data-pick="${p.id}">${ICON.pin}${esc(placeLabel(p))}</button>`).join('')}</div>`
+        : sel ? '' : '<p class="hint">일정 탭 › 갈 곳에서 장소를 저장하면 여기서 바로 고를 수 있어요.</p>'}`;
+  };
+  pickBox.addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-pick]');
+    if (pick) {
+      form.elements.place_id.value = pick.dataset.pick;
+      const p = store.places.find((x) => x.id === pick.dataset.pick);
+      if (!form.elements.title.value.trim()) form.elements.title.value = placeLabel(p);
+      drawPick();
+    } else if (e.target.closest('[data-unpick]')) { form.elements.place_id.value = ''; drawPick(); }
+  });
+  drawPick();
 
   // 새 항목에 시간 입력 시 알림 기본값 켜기
   const timeIn = form.elements.time;
@@ -1023,6 +1255,7 @@ function openSheet(item) {
       end_date: repeat !== 'none' && f.end_date.value ? f.end_date.value : null,
       remind_before: remind, nag_every: kind === 'task' && remind != null ? Number(f.nag_every.value) : 0,
       difficulty: kind === 'task' ? f.difficulty.value : 'normal',
+      place_id: f.place_id.value || null,
     };
     if (!data.title) return;
     if (repeat === 'weekly' && !data.weekdays.length) { toast('반복할 요일을 하나 이상 고르세요'); return; }
@@ -1083,8 +1316,33 @@ $app.addEventListener('click', async (e) => {
       }
       if (done && item && item.owner !== store.me.id) store.callFn({ action: 'notify', verb: 'done', item_id: id }).catch(() => {});
       if (done) handleLevelUps(before);
+      // 장소가 연결된 일정을 끝내면 그 장소는 '다녀온 곳'으로
+      const pl = done && item?.place_id ? store.places.find((p) => p.id === item.place_id) : null;
+      if (pl && !pl.visited_at) {
+        await store.updatePlace(pl.id, { visited_at: new Date().toISOString() });
+        setTimeout(() => toast(`다녀온 곳으로 옮겼어요 · ${placeLabel(pl)}`), 1400);
+      }
     }
     else if (act === 'lvwho') { state.lvWho = el.dataset.v; render(); }
+    else if (act === 'uptab') { state.upTab = el.dataset.v; render(); window.scrollTo(0, 0); }
+    else if (act === 'place-filter') { state.placeFilter = el.dataset.v; render(); }
+    else if (act === 'place-clear') { state.placeResults = null; state.placeQuery = ''; render(); }
+    else if (act === 'place-manual') openManualPlaceSheet();
+    else if (act === 'place-open') openPlaceSheet(store.places.find((p) => p.id === el.dataset.id));
+    else if (act === 'place-plan') {
+      const p = store.places.find((x) => x.id === el.dataset.id);
+      openSheet(null, { kind: 'event', place_id: p.id, title: placeLabel(p), start_date: today() });
+    }
+    else if (act === 'place-add') {
+      const r = state.placeResults?.results?.[Number(el.dataset.i)];
+      if (!r) return;
+      el.disabled = true;
+      const p = await store.addPlace(r, state.placeResults.query);
+      if (p.source === 'kakao') placeInfo.set(p.id, r);   // 방금 검색한 실시간 결과로 바로 표시
+      state.placeFilter = 'want';
+      render();
+      toast(`갈 곳에 추가했어요 · ${r.name}`);
+    }
     else if (act === 'mood-add') openMoodSheet(el.dataset.day, el.dataset.emoji || null);
     else if (act === 'moodwho') { state.moodWho = el.dataset.v; state.moodHistAll = false; render(); }
     else if (act === 'mood-more') { state.moodHistAll = true; render(); }
