@@ -208,10 +208,16 @@ async function tick() {
     if (n != null && inWindow(n) && (await claim(`nag:${m.id}:${now.date}`))) {
       const left = todayFor(m.id).filter((i) => i.kind === "task" && !isDone(C, i.id, now.date));
       const od = overdueFor(m.id);
+      // 오늘 감정 기록을 아직 안 했으면 같이 알림
+      const { data: mood } = await db.from("moods").select("day").eq("member_id", m.id).eq("day", now.date).maybeSingle();
+      const moodLine = mood ? [] : ["📝 오늘 감정 기록도 남겨 보세요"];
       if (left.length + od.length > 0) {
         const lines = [...left, ...od].slice(0, 6).map((i) => `☐ ${i.title}`);
-        await sendTo(m.id, { title: `아직 못 끝낸 할일 ${left.length + od.length}개`, body: lines.join("\n"), tag: "nag" });
+        await sendTo(m.id, { title: `아직 못 끝낸 할일 ${left.length + od.length}개`, body: [...lines, ...moodLine].join("\n"), tag: "nag" });
         log.push(`nag ${m.name}`);
+      } else if (!mood) {
+        await sendTo(m.id, { title: "오늘 하루 어땠어요?", body: "감정을 기록하고 하루를 정리해 보세요", tag: "mood" });
+        log.push(`mood ${m.name}`);
       }
     }
   }
