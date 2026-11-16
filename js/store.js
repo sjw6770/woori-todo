@@ -218,8 +218,8 @@ class SupabaseStore {
     await this.load();
     return data;
   }
-  async addManualPlace({ name, address, memo, tags = [] }) {
-    const { data, error } = await this.#sb.from('places').insert({ source: 'manual', name, address, memo, tags }).select().single();
+  async addManualPlace({ name, address, memo, tags = [], lat = null, lng = null }) {
+    const { data, error } = await this.#sb.from('places').insert({ source: 'manual', name, address, memo, tags, lat, lng }).select().single();
     if (error) throw new Error(error.message);
     await this.load();
     return data;
@@ -486,8 +486,8 @@ class DemoStore {
     this.#db.places.push(p); this.#write(); this.#sync();
     return p;
   }
-  async addManualPlace({ name, address, memo, tags = [] }) {
-    const p = { id: uid(), source: 'manual', source_id: null, query: null, name, address, category: null, lat: null, lng: null, url: null,
+  async addManualPlace({ name, address, memo, tags = [], lat = null, lng = null }) {
+    const p = { id: uid(), source: 'manual', source_id: null, query: null, name, address, category: null, lat, lng, url: null,
       memo, tags, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
     this.#db.places.push(p); this.#write(); this.#sync();
     return p;

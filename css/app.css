@@ -621,3 +621,30 @@ html.calm-lock body { overflow: hidden; }
 .tagfilter::-webkit-scrollbar { display: none; }
 .tagfilter button { flex: none; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--shared); background: transparent; border: 1px solid color-mix(in srgb, var(--shared) 40%, transparent); }
 .tagfilter button[aria-pressed="true"] { background: var(--shared); color: #fff; border-color: var(--shared); }
+
+/* 갈 곳 지도 · 내보내기 */
+.pview { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
+.pview .linkbtn { font-size: 14px; padding: 4px 0; }
+.pmap-wrap { position: relative; isolation: isolate; z-index: 0; border-radius: 16px; overflow: hidden; background: var(--field); }
+.pmap { height: min(62vh, 520px); width: 100%; }
+.pmap .leaflet-control-attribution { font-size: 10px; }
+.pmap-me { position: absolute; left: 10px; bottom: 10px; z-index: 500; display: inline-flex; align-items: center; gap: 4px; padding: 8px 12px; border-radius: 999px;
+  background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(0, 0, 0, .18); }
+.pmap-me svg { color: #2f7cf6; }
+.pmap-miss { margin-top: 8px; }
+.pmap-miss .linkbtn { font-size: inherit; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.ppin-wrap { background: none; border: 0; }
+.ppin { display: block; width: 26px; height: 26px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--shared); border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .3); }
+.ppin.visited { background: #9aa39e; }
+.leaflet-tooltip.ppin-label { padding: 2px 7px; border-radius: 8px; font: 700 12px/1.4 'Pretendard Variable', Pretendard, -apple-system, sans-serif; color: #1d2320; background: rgba(255, 255, 255, .92); border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.leaflet-tooltip.ppin-label::before { display: none; }
+.ppop { display: flex; flex-direction: column; gap: 3px; font: 14px/1.4 'Pretendard Variable', Pretendard, -apple-system, sans-serif; }
+.ppop b { font-size: 15px; }
+.ppop small { color: #6b7570; font-size: 12px; }
+.ppop-row { display: flex; gap: 6px; margin-top: 6px; }
+.ppop-row button { flex: 1; padding: 7px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; background: #eef2ef; color: #1d2320; }
+.ppop-row button.strong { background: #1d2320; color: #fff; }
+.ph-links { display: flex; gap: 14px; flex-wrap: wrap; }
+.ph-locate { align-self: flex-start; font-size: 13px; padding: 4px 0; }
+.sheet .howto { margin-top: 16px; }
+.pview .range { margin-left: 0; }

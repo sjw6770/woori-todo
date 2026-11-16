@@ -1,5 +1,5 @@
 // 우리할일 서비스 워커: 푸시 알림 표시 + 오프라인 시 앱 화면 캐시
-const CACHE = 'woori-v7';
+const CACHE = 'woori-v8';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/store.js', 'js/schedule.js', 'js/quest.js', 'js/mood.js', 'js/config.js', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {

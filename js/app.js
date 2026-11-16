@@ -776,12 +776,167 @@ const tagFieldHTML = `<div class="field" data-tagbox><span>태그 <small>여러 
   <div class="tagnew"><input data-tagnew maxlength="20" placeholder="새 태그 (예: 비 오는 날)" autocomplete="off" enterkeyhint="done" aria-label="새 태그"><button type="button" class="btn" data-tagadd>추가</button></div>
 </div>`;
 
+// ------------------------------------------------------------------ 갈 곳 지도 (OpenStreetMap + Leaflet)
+// 위치: 직접·OSM 장소는 저장된 좌표, 카카오 장소는 그때그때 조회한 좌표(저장 안 함)
+const placePos = (p) => {
+  const s = p.source === 'kakao' ? kinfo(p) : p;
+  return s && Number.isFinite(s.lat) && Number.isFinite(s.lng) ? { lat: s.lat, lng: s.lng } : null;
+};
+// 다른 지도 앱에서 열기 (각 앱에서 '저장'을 누르면 그 앱 목록에 들어감)
+function kakaoLink(p) {
+  if (p.source === 'kakao') return kinfo(p)?.url ?? `https://place.map.kakao.com/${encodeURIComponent(p.source_id)}`;
+  const pos = placePos(p);
+  return pos ? `https://map.kakao.com/link/map/${encodeURIComponent(p.name)},${pos.lat},${pos.lng}`
+    : `https://map.kakao.com/link/search/${encodeURIComponent(p.name)}`;
+}
+const naverLink = (p) => `https://map.naver.com/p/search/${encodeURIComponent(placeLabel(p))}`;
+
+const LEAFLET = { js: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js', jsSri: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=',
+  css: 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css', cssSri: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=' };
+let leafletP = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  return (leafletP ??= new Promise((resolve, reject) => {
+    const css = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: LEAFLET.css, integrity: LEAFLET.cssSri, crossOrigin: '' });
+    const js = Object.assign(document.createElement('script'), { src: LEAFLET.js, integrity: LEAFLET.jsSri, crossOrigin: '' });
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { leafletP = null; js.remove(); reject(new Error('지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.')); };
+    document.head.append(css, js);
+  }));
+}
+
+let pmap = null, myLoc = null;
+async function mountPlaceMap(list) {
+  if (pmap) { pmap.remove(); pmap = null; }
+  const el = $app.querySelector('#pmap');
+  if (!el) return;
+  let L;
+  try { L = await loadLeaflet(); } catch (e) { el.innerHTML = `<p class="mc-empty">${esc(e.message)}</p>`; return; }
+  if (!el.isConnected) return;
+  const map = L.map(el, { zoomControl: false });
+  pmap = map;
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자',
+  }).addTo(map);
+  L.control.zoom({ position: 'bottomright', zoomInTitle: '확대', zoomOutTitle: '축소' }).addTo(map);
+  const pts = list.map((p) => ({ p, pos: placePos(p) })).filter((x) => x.pos);
+  for (const { p, pos } of pts) {
+    const icon = L.divIcon({ className: 'ppin-wrap', html: `<span class="ppin${p.visited_at ? ' visited' : ''}"></span>`, iconSize: [26, 34], iconAnchor: [13, 33], popupAnchor: [0, -30] });
+    const m = L.marker([pos.lat, pos.lng], { icon, title: placeLabel(p), alt: placeLabel(p) }).addTo(map);
+    m.bindTooltip(placeLabel(p), { permanent: pts.length <= 15, direction: 'right', offset: [10, -18], className: 'ppin-label' });
+    m.bindPopup(() => placePopup(p), { closeButton: false, minWidth: 180 });
+  }
+  if (myLoc) L.circleMarker([myLoc.lat, myLoc.lng], { radius: 7, weight: 3, color: '#fff', fillColor: '#2f7cf6', fillOpacity: 1 }).addTo(map);
+  if (state.mapPos) map.setView([state.mapPos.lat, state.mapPos.lng], state.mapPos.zoom);
+  else if (pts.length) map.fitBounds(L.latLngBounds(pts.map((x) => [x.pos.lat, x.pos.lng])).pad(0.25), { maxZoom: 15 });
+  else map.setView([37.5665, 126.978], 12);
+  map.on('moveend', () => { const c = map.getCenter(); state.mapPos = { lat: c.lat, lng: c.lng, zoom: map.getZoom() }; });
+}
+function placePopup(p) {
+  const box = document.createElement('div');
+  box.className = 'ppop';
+  const name = document.createElement('b'); name.textContent = placeLabel(p);
+  box.append(name);
+  const sub = placeSub(p);
+  if (sub) { const s = document.createElement('small'); s.textContent = sub; box.append(s); }
+  if (p.tags?.length) { const t = document.createElement('span'); t.className = 'pl-tags'; t.textContent = p.tags.map((x) => `#${x}`).join(' '); box.append(t); }
+  const row = document.createElement('div'); row.className = 'ppop-row';
+  const more = Object.assign(document.createElement('button'), { type: 'button', textContent: '자세히' });
+  more.onclick = () => { pmap?.closePopup(); openPlaceSheet(p); };
+  row.append(more);
+  if (!p.visited_at) {
+    const plan = Object.assign(document.createElement('button'), { type: 'button', textContent: '일정 잡기', className: 'strong' });
+    plan.onclick = () => { pmap?.closePopup(); openSheet(null, { kind: 'event', place_id: p.id, title: placeLabel(p), start_date: today() }); };
+    row.append(plan);
+  }
+  box.append(row);
+  return box;
+}
+function locateMe() {
+  if (!navigator.geolocation) { toast('이 기기에서는 위치를 쓸 수 없어요'); return; }
+  navigator.geolocation.getCurrentPosition((g) => {
+    myLoc = { lat: g.coords.latitude, lng: g.coords.longitude };
+    state.mapPos = { ...myLoc, zoom: 15 };
+    render();
+  }, () => toast('위치 권한이 없어서 내 위치를 못 찾았어요'), { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+}
+
+// 주소(또는 이름)로 좌표 찾기 — OpenStreetMap 결과만 저장 (카카오 결과는 정책상 저장하지 않음)
+async function geocodeOSM(q) {
+  if (!q) return null;
+  try {
+    const r = await store.searchPlaces(q);
+    const hit = (r.results ?? []).find((x) => x.source === 'osm' && Number.isFinite(x.lat) && Number.isFinite(x.lng));
+    return hit ? { lat: hit.lat, lng: hit.lng } : null;
+  } catch { return null; }
+}
+
+// 내보내기: 네이버·카카오맵은 파일 불러오기를 지원하지 않아서, Google 내 지도·구글 어스 등에서 여는 CSV·KML 로
+const xmlEsc = (s = '') => String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+const csvCell = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+function exportRows() {
+  // 카카오 장소는 정책상 응답 내용(이름·주소·좌표)을 내보내지 않고, 내가 입력한 검색어와 카카오맵 링크만
+  return store.places.map((p) => p.source === 'kakao'
+    ? { name: p.query, address: '', lat: '', lng: '', link: `https://place.map.kakao.com/${p.source_id}`, p }
+    : { name: p.name, address: p.address ?? '', lat: p.lat ?? '', lng: p.lng ?? '', link: p.url ?? '', p });
+}
+function placesCSV() {
+  const head = ['이름', '주소', '위도', '경도', '태그', '메모', '상태', '링크'];
+  const lines = exportRows().map((r) => [r.name, r.address, r.lat, r.lng, (r.p.tags ?? []).join(' '), r.p.memo ?? '', r.p.visited_at ? '다녀옴' : '가고 싶음', r.link].map(csvCell).join(','));
+  return '﻿' + [head.join(','), ...lines].join('\r\n');
+}
+function placesKML() {
+  const pm = exportRows().filter((r) => r.lat !== '' && r.lng !== '').map((r) => `
+    <Placemark><name>${xmlEsc(r.name)}</name>
+      <description>${xmlEsc([r.address, (r.p.tags ?? []).map((t) => `#${t}`).join(' '), r.p.memo, r.p.visited_at ? '다녀옴' : '가고 싶음'].filter(Boolean).join('\n'))}</description>
+      <styleUrl>#${r.p.visited_at ? 'been' : 'want'}</styleUrl>
+      <Point><coordinates>${r.lng},${r.lat},0</coordinates></Point></Placemark>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>우리할일 갈 곳</name>
+  <Style id="want"><IconStyle><color>ff7a9e2f</color></IconStyle></Style>
+  <Style id="been"><IconStyle><color>ff9a9a9a</color></IconStyle></Style>${pm}
+</Document></kml>`;
+}
+async function shareFile(name, type, text) {
+  const file = new File([text], name, { type });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function openExportSheet() {
+  const withPos = exportRows().filter((r) => r.lat !== '').length;
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  wrap.innerHTML = `
+  <div class="scrim" data-close></div>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="갈 곳 내보내기">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head"><button type="button" class="linkbtn" data-close>닫기</button><h2 class="sheet-title">갈 곳 내보내기</h2><span></span></div>
+    <p class="hint">저장한 ${store.places.length}곳을 파일로 내보내요. <b>Google 내 지도</b>(mymaps.google.com) → 새 지도 → <b>가져오기</b>에 넣으면 핀으로 보여요.</p>
+    <button type="button" class="btn primary wide" data-ex="csv">CSV 파일 (${store.places.length}곳 · 엑셀에서도 열림)</button>
+    <button type="button" class="btn wide" data-ex="kml">KML 파일 (위치 있는 ${withPos}곳 · 구글 어스·내 지도)</button>
+    <div class="howto">네이버지도·카카오맵은 다른 앱에서 만든 장소 목록 파일을 불러오는 기능이 없어요. 대신 장소를 눌러 <b>네이버지도</b> / <b>카카오맵</b> 버튼으로 열고, 그 앱에서 저장(☆)을 누르면 그 앱 목록에 들어가요.</div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
+  wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  requestAnimationFrame(() => wrap.classList.add('open'));
+  wrap.querySelector('[data-ex=csv]').addEventListener('click', () => shareFile('우리할일-갈곳.csv', 'text/csv', placesCSV()));
+  wrap.querySelector('[data-ex=kml]').addEventListener('click', () => shareFile('우리할일-갈곳.kml', 'application/vnd.google-earth.kml+xml', placesKML()));
+}
+
+const filteredPlaces = () => store.places.filter((p) => Boolean(p.visited_at) === (state.placeFilter === 'visited'))
+  .filter((p) => !state.placeTag || (p.tags ?? []).includes(state.placeTag));
+
 function placesView() {
   const want = store.places.filter((p) => !p.visited_at);
   const been = store.places.filter((p) => p.visited_at);
   const tags = allTags();
   if (state.placeTag && !tags.includes(state.placeTag)) state.placeTag = null;
-  const list = (state.placeFilter === 'visited' ? been : want).filter((p) => !state.placeTag || (p.tags ?? []).includes(state.placeTag));
+  const list = filteredPlaces();
   const r = state.placeResults;
   const added = (x) => store.places.some((p) => p.source === x.source && p.source_id && p.source_id === x.source_id);
   const results = state.placeSearching
@@ -820,7 +975,16 @@ function placesView() {
         <button data-act="place-tag" data-v="" aria-pressed="${!state.placeTag}">전체</button>
         ${tags.map((t) => `<button data-act="place-tag" data-v="${esc(t)}" aria-pressed="${state.placeTag === t}">#${esc(t)}</button>`).join('')}
       </div>` : ''}
-      ${list.length ? `<ul class="plist">${list.map((p) => {
+      <div class="pview">
+        <span class="range" role="group" aria-label="보기">${[['list', '목록'], ['map', '지도']].map(([v, l]) => `<button data-act="place-mode" data-v="${v}" aria-pressed="${(state.placeMode ?? 'list') === v}">${l}</button>`).join('')}</span>
+        ${store.places.length ? '<button class="linkbtn" data-act="place-export">내보내기</button>' : ''}
+      </div>
+      ${state.placeMode === 'map' ? (() => {
+        const miss = list.filter((p) => !placePos(p) && !(p.source === 'kakao' && !placeInfo.has(p.id)));
+        return `<div class="pmap-wrap"><div class="pmap" id="pmap" role="region" aria-label="갈 곳 지도"></div>
+          <button class="pmap-me" data-act="map-me" aria-label="내 위치로">${ICON.pin}내 위치</button></div>
+          ${miss.length ? `<p class="hint pmap-miss">위치가 없어 지도에 안 보이는 곳 ${miss.length}곳: ${miss.map((p) => `<button class="linkbtn" data-act="place-open" data-id="${p.id}">${esc(placeLabel(p))}</button>`).join(', ')}</p>` : ''}`;
+      })() : list.length ? `<ul class="plist">${list.map((p) => {
         const plans = store.items.filter((i) => i.place_id === p.id && i.start_date >= today()).length;
         const by = member(p.added_by);
         return `
@@ -857,7 +1021,11 @@ function openPlaceSheet(p, { justAdded = false } = {}) {
       <p class="ph-name">${esc(placeLabel(p))}</p>
       ${placeSub(p) ? `<p class="ph-sub">${esc(placeSub(p))}</p>` : ''}
       ${kinfo(p)?.phone ? `<p class="ph-sub">${esc(kinfo(p).phone)}</p>` : ''}
-      <a class="ph-map" href="${esc(placeUrl(p))}" target="_blank" rel="noopener">${ICON.pin}지도에서 보기</a>
+      <div class="ph-links">
+        <a class="ph-map" href="${esc(naverLink(p))}" target="_blank" rel="noopener">${ICON.pin}네이버지도</a>
+        <a class="ph-map" href="${esc(kakaoLink(p))}" target="_blank" rel="noopener">${ICON.pin}카카오맵</a>
+      </div>
+      ${p.source !== 'kakao' && !placePos(p) ? `<button type="button" class="linkbtn ph-locate" data-locate>앱 지도에 핀이 없어요 · ${p.address ? '주소로' : '이름으로'} 위치 찾기</button>` : ''}
     </div>
     ${tagFieldHTML}
     <label class="field"><span>메모</span><textarea name="memo" id="place-memo" rows="2" maxlength="300" placeholder="예: 웨이팅 길다고 함, 평일 오전 추천">${esc(p.memo ?? '')}</textarea></label>
@@ -871,6 +1039,12 @@ function openPlaceSheet(p, { justAdded = false } = {}) {
   wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   requestAnimationFrame(() => wrap.classList.add('open'));
   const getTags = tagField(form, p.tags ?? []);
+  form.querySelector('[data-locate]')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = '찾는 중…';
+    const pos = await geocodeOSM(p.address || p.name);
+    if (!pos) { b.disabled = false; b.textContent = '위치를 못 찾았어요 · 다시 시도'; return; }
+    try { await store.updatePlace(p.id, { lat: pos.lat, lng: pos.lng }); state.mapPos = null; b.remove(); render(); toast('지도에 핀을 꽂았어요'); } catch (err) { toast(err.message); }
+  });
   form.querySelector('[data-plan]').addEventListener('click', () => { close(); openSheet(null, { kind: 'event', place_id: p.id, title: placeLabel(p), start_date: today() }); });
   const del = form.querySelector('[data-del]');
   del.addEventListener('click', async () => {
@@ -917,10 +1091,14 @@ function openManualPlaceSheet() {
     const f = form.elements;
     if (!f.name.value.trim()) return;
     try {
-      await store.addManualPlace({ name: f.name.value.trim(), address: f.address.value.trim() || null, memo: f.memo.value.trim() || null, tags: getTags() });
+      const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+      const address = f.address.value.trim() || null;
+      const pos = address ? await geocodeOSM(address) : null;   // 주소가 있으면 지도 핀 위치도 같이
+      await store.addManualPlace({ name: f.name.value.trim(), address, memo: f.memo.value.trim() || null, tags: getTags(), ...(pos ?? {}) });
+      state.mapPos = null;
       state.placeFilter = 'want';
-      close(); render(); toast('갈 곳에 추가했어요');
-    } catch (e) { toast(e.message); }
+      close(); render(); toast(pos || !address ? '갈 곳에 추가했어요' : '추가했어요 · 주소로 지도 위치는 못 찾았어요');
+    } catch (e) { toast(e.message); form.querySelector('[type=submit]').disabled = false; }
   });
 }
 
@@ -1002,6 +1180,8 @@ function render() {
   if (state.view === 'mood') drawMoodChart();
   renderCalm();
   ensurePlaceInfo();
+  if (state.view === 'upcoming' && state.upTab === 'places' && state.placeMode === 'map') mountPlaceMap(filteredPlaces());
+  else if (pmap) { pmap.remove(); pmap = null; }
 }
 
 // 장소 검색 (폼 제출)
@@ -1419,8 +1599,11 @@ $app.addEventListener('click', async (e) => {
     }
     else if (act === 'lvwho') { state.lvWho = el.dataset.v; render(); }
     else if (act === 'uptab') { state.upTab = el.dataset.v; render(); window.scrollTo(0, 0); }
-    else if (act === 'place-filter') { state.placeFilter = el.dataset.v; render(); }
-    else if (act === 'place-tag') { state.placeTag = el.dataset.v || null; render(); }
+    else if (act === 'place-filter') { state.placeFilter = el.dataset.v; state.mapPos = null; render(); }
+    else if (act === 'place-tag') { state.placeTag = el.dataset.v || null; state.mapPos = null; render(); }
+    else if (act === 'place-mode') { state.placeMode = el.dataset.v; render(); }
+    else if (act === 'place-export') openExportSheet();
+    else if (act === 'map-me') locateMe();
     else if (act === 'place-clear') { state.placeResults = null; state.placeQuery = ''; render(); }
     else if (act === 'place-manual') openManualPlaceSheet();
     else if (act === 'place-open') openPlaceSheet(store.places.find((p) => p.id === el.dataset.id));
