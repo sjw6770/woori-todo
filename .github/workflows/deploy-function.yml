@@ -40,6 +40,18 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
+      - name: Apply DB migrations (supabase/migrations/*.sql, 여러 번 실행해도 안전)
+        run: |
+          shopt -s nullglob
+          for f in supabase/migrations/*.sql; do
+            echo "== $f"
+            body=$(jq -Rs '{query: .}' < "$f")
+            res=$(curl -s -w '\n%{http_code}' -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$body")
+            echo "$res" | head -c 600; echo
+            code=$(echo "$res" | tail -1)
+            case "$code" in 2*) ;; *) echo "::error::$f 적용 실패 (HTTP $code)"; exit 1;; esac
+          done
       - name: Set function secrets
         run: |
           supabase secrets set --remote="$PROJECT_REF" --yes \
@@ -64,3 +76,5 @@ jobs:
           q "select name from public.members"
           q "select jobname, schedule, active from cron.job"
           q "select status_code, left(content::text, 80) as body, created from net._http_response order by created desc limit 3"
+          q "select m.name, coalesce(t.total, 0) as xp, (select count(*) from public.rewards r where r.member_id = m.id) as rewards from public.members m left join public.xp_totals t on t.member_id = m.id"
+          q "select count(*) as items, count(*) filter (where kind = 'task') as quests from public.items"

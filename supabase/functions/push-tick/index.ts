@@ -117,6 +117,13 @@ function fireSlots(item: Item, fireDate: string) {
   }
   return slots;
 }
+// 레벨 규칙 (web/js/quest.js 와 동일): Lv.L→L+1 에 100 + 50(L-1) XP
+const xpToReach = (L: number) => 100 * (L - 1) + (50 * (L - 1) * (L - 2)) / 2;
+function levelOf(total: number) {
+  let L = 1;
+  while (total >= xpToReach(L + 1)) L++;
+  return L;
+}
 const relevant = (item: Item, memberId: string) => item.owner === null || item.owner === memberId;
 const when = (item: Item) => (item.time ? item.time.slice(0, 5) : "");
 function beforeLabel(min: number) {
@@ -240,13 +247,33 @@ async function fromApp(req: Request, body: Record<string, string>) {
   const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "");
   const { data: { user } } = await db.auth.getUser(token);
   if (!user) return json({ error: "unauthorized" }, 401);
-  const { data: members } = await db.from("members").select("id,name");
-  const me = (members ?? []).find((m) => m.id === user.id);
+  const { data } = await db.from("members").select("id,name");
+  const members = (data ?? []) as { id: string; name: string }[];
+  const me = members.find((m) => m.id === user.id);
   if (!me) return json({ error: "not a member" }, 403);
 
   if (body.action === "test") {
     const n = await sendTo(me.id, { title: "🔔 테스트 알림", body: "알림이 잘 오고 있어요!", tag: "test" });
     return json({ ok: true, sent: n });
+  }
+
+  // 레벨 업: 서버에서 다시 계산해서 실제로 도달했을 때만, 레벨마다 한 번만 보냄
+  if (body.action === "notify" && body.verb === "levelup") {
+    const target = (members ?? []).find((m) => m.id === body.member_id);
+    if (!target) return json({ error: "no member" }, 404);
+    const { data: tot } = await db.from("xp_totals").select("total").eq("member_id", target.id).maybeSingle();
+    const want = Number(body.level);
+    if (!want || levelOf(tot?.total ?? 0) < want) return json({ ok: false, reason: "level not reached" });
+    if (!(await claim(`levelup:${target.id}:${want}`))) return json({ ok: true, sent: 0, duplicate: true });
+    const { data: rws } = await db.from("rewards").select("title").eq("member_id", target.id).eq("level", want);
+    const rw = rws?.length ? `보상: ${rws.map((r: { title: string }) => r.title).join(", ")}` : "";
+    let sent = 0;
+    for (const m of (members ?? []).filter((x) => x.id !== me.id)) { // 체크한 사람은 앱 화면으로 이미 봄
+      sent += await sendTo(m.id, m.id === target.id
+        ? { title: `🎉 Lv.${want} 달성!`, body: rw || "다음 목표 보상을 정해 보세요", tag: `lv-${target.id}` }
+        : { title: `🎉 ${target.name}님이 Lv.${want} 달성!`, body: rw || "축하해 주세요", tag: `lv-${target.id}` });
+    }
+    return json({ ok: true, sent });
   }
 
   if (body.action === "notify") {
