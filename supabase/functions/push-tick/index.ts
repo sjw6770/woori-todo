@@ -156,11 +156,39 @@ async function kakaoSearch(q: string) {
   return results.length ? results : await kakaoAddress(q);
 }
 
-// OpenStreetMap Nominatim (키 불필요, 초당 1회 이하·식별 가능한 User-Agent 필수 정책)
+// OpenStreetMap 검색 (키 불필요). Photon(komoot) 먼저, 안 되면 Nominatim.
+const OSM_UA = "woori-todo/1.0 (personal couple app; https://github.com/sjw6770/woori-todo)";
 async function osmSearch(q: string): Promise<PlaceResult[]> {
+  try {
+    return await photonSearch(q);
+  } catch (e) {
+    console.error("photon", (e as Error).message);
+    return await nominatimSearch(q);
+  }
+}
+async function photonSearch(q: string): Promise<PlaceResult[]> {
+  const res = await fetch(`https://photon.komoot.io/api/?${new URLSearchParams({ q, limit: "10", bbox: "124.5,33.0,131.9,38.7" })}`,
+    { headers: { "User-Agent": OSM_UA } });
+  if (!res.ok) throw new Error(`photon ${res.status}`);
+  // deno-lint-ignore no-explicit-any
+  return ((await res.json()).features ?? []).filter((f: any) => f.properties?.name).map((f: any): PlaceResult => {
+    const p = f.properties;
+    const t = { N: "node", W: "way", R: "relation" }[p.osm_type as string] ?? "node";
+    return {
+      source: "osm", source_id: `${t}/${p.osm_id}`, name: p.name,
+      category: p.osm_value && p.osm_value !== "yes" ? p.osm_value : p.osm_key ?? "",
+      address: [p.state, p.city, p.county, p.district, p.locality, p.street, p.housenumber].filter(Boolean)
+        .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join(" "),
+      lat: Number(f.geometry.coordinates[1]), lng: Number(f.geometry.coordinates[0]),
+      url: `https://www.openstreetmap.org/${t}/${p.osm_id}`,
+    };
+  });
+}
+// Nominatim (초당 1회 이하·식별 가능한 User-Agent 필수 정책)
+async function nominatimSearch(q: string): Promise<PlaceResult[]> {
   const res = await fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({
     q, format: "jsonv2", addressdetails: "0", limit: "10", "accept-language": "ko", countrycodes: "kr",
-  })}`, { headers: { "User-Agent": "woori-todo/1.0 (personal couple app; https://github.com/sjw6770/woori-todo)" } });
+  })}`, { headers: { "User-Agent": OSM_UA } });
   if (!res.ok) throw new Error(`osm ${res.status}`);
   // deno-lint-ignore no-explicit-any
   return (await res.json()).map((r: any): PlaceResult => ({
