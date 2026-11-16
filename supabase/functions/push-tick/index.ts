@@ -282,8 +282,8 @@ async function joyCheck() {
 // ---------------------------------------------------------------- 발송
 type Payload = { title: string; body: string; tag?: string; url?: string };
 
-// app: 'woori'(우리할일) | 'joy'(JOY) — 각 앱에 등록한 기기로만 보냄
-async function sendTo(memberId: string, payload: Payload, app: "woori" | "joy" = "woori") {
+// app: 'woori'(우리할일) | 'joy'(JOY) | 'pause'(PAUSE) — 각 앱에 등록한 기기로만 보냄
+async function sendTo(memberId: string, payload: Payload, app: "woori" | "joy" | "pause" = "woori") {
   const { data: subs } = await db.from("push_subs").select("*").eq("member_id", memberId).eq("app", app);
   let sent = 0;
   for (const s of subs ?? []) {
@@ -395,6 +395,20 @@ async function tick() {
     console.error("joy", (e as Error).message);
   }
 
+  // 7) PAUSE: 진정 시간이 끝나면 둘 다에게 "다시 체크" (연장할 때마다 한 번씩)
+  try {
+    const { data: ps } = await db.from("pause_sessions").select("id,cool_until,extensions").eq("phase", "cool").is("closed_at", null);
+    for (const s of (ps ?? []) as { id: string; cool_until: string; extensions: number }[]) {
+      const past = Date.now() - Date.parse(s.cool_until);
+      if (past >= 0 && past < 10 * 60000 && (await claim(`pause-cool:${s.id}:${s.extensions}`))) {
+        for (const m of M) await sendTo(m.id, { title: "⏱ 진정 시간이 끝났어요", body: "지금 감정 강도를 다시 체크해 주세요", tag: "pause" }, "pause");
+        log.push(`pause-cool ${s.id}`);
+      }
+    }
+  } catch (e) {
+    console.error("pause", (e as Error).message);
+  }
+
   // 5) 진정 시간 종료 알림 (둘 다에게) + 12시간 넘게 열려 있는 세션 정리
   const { data: calms } = await db.from("calm_sessions").select("id,ends_at").is("ended_at", null);
   for (const s of (calms ?? []) as { id: string; ends_at: string }[]) {
@@ -501,6 +515,44 @@ async function fromApp(req: Request, body: Record<string, string>) {
     let sent = 0;
     for (const m of members.filter((x) => x.id !== me.id)) sent += await sendTo(m.id, payload);
     return json({ ok: true, sent });
+  }
+
+  // PAUSE: 상대에게 알림. 내용은 서버가 정함 (앱이 보낸 글은 정해진 3가지 빠른 메시지만 그대로 전달)
+  if (body.action === "pause") {
+    const { data: s } = await db.from("pause_sessions").select("*").eq("id", body.session_id).maybeSingle();
+    if (!s) return json({ error: "no session" }, 404);
+    const QUICK = ["❤️ 나 안 떠났어", "🕐 진정하고 다시 얘기할게", "🫂 관계를 끝내자는 뜻 아니야"];
+    let payload: Payload;
+    let once = true;
+    if (body.event === "start") {
+      if (s.started_by !== me.id) return json({ error: "forbidden" }, 403);
+      payload = { title: `🚨 ${me.name}님이 PAUSE를 요청했어요`, body: "누가 옳은지 판단하지 않아요. 관계를 끝내자는 뜻도 아니에요. 15분 동안 강도를 낮춰요.", tag: "pause" };
+    } else if (body.event === "quick") {
+      if (!QUICK.includes(body.text)) return json({ error: "bad text" }, 400);
+      payload = { title: `${me.name}님`, body: body.text, tag: `pause-q-${QUICK.indexOf(body.text)}` };
+      once = false;
+    } else if (body.event === "red") {
+      if (s.phase !== "red") return json({ error: "not red" }, 400);
+      payload = { title: "🔴 지금은 대화를 멈춰 주세요", body: `${me.name}님이 지금은 안전이 먼저라고 알렸어요. 대면 논쟁을 멈추고 앱을 열어 주세요.`, tag: "pause" };
+    } else if (body.event === "talk") {
+      if (s.phase !== "talk") return json({ error: "not talk" }, 400);
+      payload = { title: "🟢 대화를 시작할 수 있어요", body: "앱에서 한 명씩, 차례대로 이야기해요", tag: "pause" };
+    } else if (body.event === "turn") {
+      payload = { title: `💬 ${me.name}님이 차례를 마쳤어요`, body: "앱에서 읽고 이어서 답해 주세요", tag: "pause-turn" };
+      once = false;
+    } else if (body.event === "end") {
+      payload = { title: `🤝 ${me.name}님이 '오늘 싸움 종료'를 눌렀어요`, body: "준비되면 앱에서 같이 눌러 주세요", tag: "pause" };
+    } else return json({ error: "unknown event" }, 400);
+    if (once && !(await claim(`pause-${body.event}:${s.id}:${me.id}`))) return json({ ok: true, sent: 0, duplicate: true });
+    let sent = 0;
+    for (const m of members.filter((x) => x.id !== me.id)) sent += await sendTo(m.id, payload, "pause");
+    return json({ ok: true, sent });
+  }
+
+  // PAUSE 설정 화면 "알림으로 받아보기"
+  if (body.action === "pause-test") {
+    const n = await sendTo(me.id, { title: "🔔 PAUSE 알림 테스트", body: "상대가 PAUSE를 누르면 이렇게 알려 줘요", tag: "pause-test" }, "pause");
+    return json({ ok: true, sent: n });
   }
 
   // 레벨 업: 서버에서 다시 계산해서 실제로 도달했을 때만, 레벨마다 한 번만 보냄

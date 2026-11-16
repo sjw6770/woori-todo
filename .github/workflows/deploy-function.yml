@@ -87,6 +87,7 @@ jobs:
           q "select name, mood_profile from public.members"
           q "select (select count(*) from public.joy_settings) as joy_settings, (select count(*) from public.joy_activities) as joy_activities, (select count(*) from public.push_subs where app = 'woori') as woori_subs"
           q "select (select count(*) from public.moods where scores ?| array['focus','mood']) as daily4_moods, (select max((scores->>'procrast')::numeric) from public.moods) as max_procrast, (select count(*) from public.mood_private) as private_notes, (select count(*) from public.places where cardinality(tags) > 0) as tagged_places"
+          q "select (select count(*) from public.pause_rules) as pause_rules, (select count(*) from public.pause_sessions) as pause_sessions, (select count(*) from public.push_subs where app = 'pause') as pause_subs"
           q "select jobname, schedule, active from cron.job"
           q "select status_code, left(content::text, 80) as body, created from net._http_response order by created desc limit 3"
           q "select m.name, coalesce(t.total, 0) as xp, (select count(*) from public.rewards r where r.member_id = m.id) as rewards from public.members m left join public.xp_totals t on t.member_id = m.id"

@@ -1,0 +1,17 @@
+{
+  "id": "./",
+  "name": "PAUSE",
+  "short_name": "PAUSE",
+  "description": "싸움이 위험해질 때 켜는 앱",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F3F2EE",
+  "theme_color": "#F3F2EE",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
