@@ -23,7 +23,7 @@ const state = {
   moodRange: 7,            // 그래프 기간 7 | 30
   moodKeys: {},            // 그래프에 보이는 항목 (기록 방식별, 없으면 기본값)
   upTab: 'list',           // 일정 탭: list | places
-  placeQuery: '', placeResults: null, placeSearching: false, placeFilter: 'want',
+  placeQuery: '', placeResults: null, placeSearching: false, placeFilter: 'want', placeTag: null,
 };
 
 // ------------------------------------------------------------------ 유틸
@@ -226,7 +226,7 @@ function todayView() {
 
 // ------------------------------------------------------------------ 하루 감정
 const myMood = (day) => store.moods.find((m) => m.member_id === store.me.id && m.day === day);
-// 기록한 사람의 방식(감정 6가지 0~10 / 집중도 등 0~5)에 맞춰 점수 글자로
+// 기록한 사람의 방식(감정 6가지 / 집중도 등, 모두 0~10)에 맞춰 점수 글자로
 const scoreText = (e, limit = 6) => {
   const items = profileOf(member(e.member_id)).items;
   return items
@@ -235,7 +235,9 @@ const scoreText = (e, limit = 6) => {
     .slice(0, limit)
     .map((x) => `${x.label} ${e.scores[x.key]}`).join(' · ');
 };
-const shareLabel = (e) => (e.shared === false ? ' · 비공개' : '');
+const shareLabel = (e) => (e.shared === false ? ' · 나만 보기' : '');
+const myPrivate = (day) => store.moodPrivate?.find((x) => x.day === day)?.note ?? '';
+const privNote = (e, cls) => (e.member_id === store.me.id && myPrivate(e.day) ? `<${cls === 'mt-note' ? 'p' : 'span'} class="${cls} private"><b>🔒</b>${esc(myPrivate(e.day))}</${cls === 'mt-note' ? 'p' : 'span'}>` : '');
 
 // 오늘 화면 맨 아래: 감정 기록 바로가기
 function moodShortcut() {
@@ -268,6 +270,7 @@ function moodView() {
           <p class="mt-label">${te.emoji ? `오늘 기분 · ${emojiLabel(te.emoji)}` : '오늘 기록'}${shareLabel(te)}</p>
           ${scoreText(te) ? `<p class="mt-scores">${scoreText(te)}</p>` : ''}
           ${te.note ? `<p class="mt-note">${esc(te.note)}</p>` : ''}
+          ${privNote(te, 'mt-note')}
         </div>
         ${isMe ? `<button class="linkbtn mt-edit" data-act="mood-add" data-day="${t}">수정</button>` : ''}
       </section>`
@@ -319,7 +322,7 @@ function moodView() {
           ${prof.emoji ? `<span class="mh-emoji" aria-hidden="true">${esc(e.emoji || '·')}</span>` : ''}
           <span class="mh-body"><span class="mh-date">${md(e.day)} ${W[dow(e.day)]}${e.emoji ? ` · ${emojiLabel(e.emoji)}` : ''}${shareLabel(e)}</span>
             ${scoreText(e) ? `<span class="mh-scores">${scoreText(e)}</span>` : ''}
-            ${e.note ? `<span class="mh-note">${esc(e.note)}</span>` : ''}</span>
+            ${e.note ? `<span class="mh-note">${esc(e.note)}</span>` : ''}${privNote(e, 'mh-note')}</span>
         </button></li>`).join('')}</ul>
         ${allHistory.length > history.length ? `<button class="linkbtn more" data-act="mood-more">기록 더 보기</button>` : ''}`
       : `<p class="empty">${isMe ? '첫 감정을 기록해 보세요.' : '공개된 기록이 아직 없어요.'}</p>`}
@@ -423,13 +426,15 @@ function openMoodSheet(day = today(), presetEmoji = null) {
       </div>
       <p class="hint">점수 숫자를 누르면 지워져요.</p>
     </div>
-    <label class="field"><span>이유 <small>간단히</small></span><textarea name="note" id="mood-note" rows="3" maxlength="300" placeholder="예: 프로젝트 마감해서 홀가분, 퇴근길 지하철이 너무 붐빔"></textarea></label>
-    ${p ? `<div class="field"><span>공개 범위</span>
-      <div class="seg2 share" role="radiogroup" aria-label="공개 범위">
-        <label><input type="radio" name="share" value="public" id="mood-public"><span>공개<small>${esc(p.name)}도 볼 수 있어요</small></span></label>
-        <label><input type="radio" name="share" value="private" id="mood-private"><span>비공개<small>나만 봐요</small></span></label>
+    <div class="field"><span>이유 <small>간단히</small></span>
+      <div class="notes2">
+        <label class="note-box"><span class="nb-head">공개<small>${p ? `${esc(p.name)}도 볼 수 있어요` : '함께 보는 메모'}</small></span>
+          <textarea name="note" id="mood-note" rows="3" maxlength="300" placeholder="예: 프로젝트 마감해서 홀가분"></textarea></label>
+        <label class="note-box private"><span class="nb-head">🔒 비공개<small>나만 봐요</small></span>
+          <textarea name="pnote" id="mood-pnote" rows="3" maxlength="300" placeholder="나만 알고 싶은 이야기"></textarea></label>
       </div>
-    </div>` : ''}
+    </div>
+    ${p ? `<label class="switch stack"><input type="checkbox" name="hideall" id="mood-hideall"><span>이 날 기록 전체를 나만 보기<small>켜면 점수와 공개 메모도 ${esc(p.name)}에게 안 보여요</small></span></label>` : ''}
     <button type="button" class="btn danger" data-del hidden>이 날 기록 삭제</button>
   </form>`;
   document.body.appendChild(wrap);
@@ -450,8 +455,9 @@ function openMoodSheet(day = today(), presetEmoji = null) {
     form.querySelectorAll('[name=emoji]').forEach((r) => { r.checked = r.value === (e?.emoji ?? (d === day ? presetEmoji : null)); });
     form.querySelectorAll('.sl-row').forEach((row) => setRow(row, e?.scores?.[row.dataset.k] ?? null));
     form.elements.note.value = e?.note ?? '';
+    form.elements.pnote.value = myPrivate(d);
     const shared = e ? e.shared !== false : lastShared !== false;
-    form.querySelectorAll('[name=share]').forEach((r) => { r.checked = r.value === (shared ? 'public' : 'private'); });
+    if (form.elements.hideall) form.elements.hideall.checked = !shared;
     const del = form.querySelector('[data-del]');
     del.hidden = !e; delete del.dataset.armed; del.textContent = '이 날 기록 삭제';
   };
@@ -475,13 +481,13 @@ function openMoodSheet(day = today(), presetEmoji = null) {
     form.querySelectorAll('.sl-row[data-set="1"]').forEach((row) => { scores[row.dataset.k] = Number(row.querySelector('input').value); });
     const emoji = prof.emoji ? form.querySelector('[name=emoji]:checked')?.value ?? null : null;
     if (!emoji && !Object.keys(scores).length) { toast(prof.emoji ? '기분 이모지나 감정 점수를 하나 이상 남겨 주세요' : '점수를 하나 이상 매겨 주세요'); return; }
-    const shared = form.querySelector('[name=share]:checked')?.value !== 'private';
+    const shared = !form.elements.hideall?.checked;
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      await store.saveMood({ day: d, emoji, scores, note: f.note.value.trim() || null, shared });
+      await store.saveMood({ day: d, emoji, scores, note: f.note.value.trim() || null, shared, privateNote: f.pnote.value.trim() || null });
       state.moodWho = store.me.id;
       close(); render();
-      toast(shared ? '기록했어요' : '비공개로 기록했어요');
+      toast(shared ? '기록했어요' : '나만 보기로 기록했어요');
     } catch (e) { toast(e.message); btn.disabled = false; }
   });
 }
@@ -727,10 +733,55 @@ async function ensurePlaceInfo() {
   render();
 }
 
+// 태그: 지금까지 쓴 태그 + 처음 쓸 때 고를 만한 예시
+const TAG_PRESETS = ['맛집', '카페', '데이트', '산책', '전시', '여행', '술집', '야경'];
+const allTags = () => [...new Set(store.places.flatMap((p) => p.tags ?? []))].sort((a, b) => a.localeCompare(b, 'ko'));
+const normTag = (t) => t.replace(/^#+/, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+const tagsLine = (p) => (p.tags?.length ? `<span class="pl-tags">${p.tags.map((t) => `#${esc(t)}`).join(' ')}</span>` : '');
+
+// 태그 고르기 (칩 눌러서 켜고 끄기 + 새 태그 입력). 반환: 지금 고른 태그를 돌려주는 함수
+function tagField(form, initial = []) {
+  const sel = new Set(initial);
+  const box = form.querySelector('[data-tagbox]');
+  const draw = () => {
+    const opts = [...new Set([...allTags(), ...sel, ...(allTags().length < 4 ? TAG_PRESETS : [])])];
+    box.querySelector('[data-tagchips]').innerHTML = opts.map((t) =>
+      `<button type="button" class="tag-chip" data-tag="${esc(t)}" aria-pressed="${sel.has(t)}">#${esc(t)}</button>`).join('');
+  };
+  const input = box.querySelector('[data-tagnew]');
+  const add = () => {
+    const t = normTag(input.value);
+    input.value = '';
+    if (!t) return;
+    if (sel.size >= 10 && !sel.has(t)) { toast('태그는 10개까지 달 수 있어요'); return; }
+    sel.add(t); draw();
+  };
+  box.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-tag]');
+    if (c) {
+      const t = c.dataset.tag;
+      if (sel.has(t)) sel.delete(t);
+      else if (sel.size >= 10) { toast('태그는 10개까지 달 수 있어요'); return; }
+      else sel.add(t);
+      draw();
+    }
+    if (e.target.closest('[data-tagadd]')) add();
+  });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } });
+  draw();
+  return () => { add(); return [...sel]; };
+}
+const tagFieldHTML = `<div class="field" data-tagbox><span>태그 <small>여러 개 골라도 돼요</small></span>
+  <div class="tagchips" data-tagchips></div>
+  <div class="tagnew"><input data-tagnew maxlength="20" placeholder="새 태그 (예: 비 오는 날)" autocomplete="off" enterkeyhint="done" aria-label="새 태그"><button type="button" class="btn" data-tagadd>추가</button></div>
+</div>`;
+
 function placesView() {
   const want = store.places.filter((p) => !p.visited_at);
   const been = store.places.filter((p) => p.visited_at);
-  const list = state.placeFilter === 'visited' ? been : want;
+  const tags = allTags();
+  if (state.placeTag && !tags.includes(state.placeTag)) state.placeTag = null;
+  const list = (state.placeFilter === 'visited' ? been : want).filter((p) => !state.placeTag || (p.tags ?? []).includes(state.placeTag));
   const r = state.placeResults;
   const added = (x) => store.places.some((p) => p.source === x.source && p.source_id && p.source_id === x.source_id);
   const results = state.placeSearching
@@ -765,6 +816,10 @@ function placesView() {
         <button role="tab" data-act="place-filter" data-v="want" aria-selected="${state.placeFilter !== 'visited'}">가고 싶은 곳 ${want.length}</button>
         <button role="tab" data-act="place-filter" data-v="visited" aria-selected="${state.placeFilter === 'visited'}">다녀온 곳 ${been.length}</button>
       </div>
+      ${tags.length ? `<div class="tagfilter" role="group" aria-label="태그로 보기">
+        <button data-act="place-tag" data-v="" aria-pressed="${!state.placeTag}">전체</button>
+        ${tags.map((t) => `<button data-act="place-tag" data-v="${esc(t)}" aria-pressed="${state.placeTag === t}">#${esc(t)}</button>`).join('')}
+      </div>` : ''}
       ${list.length ? `<ul class="plist">${list.map((p) => {
         const plans = store.items.filter((i) => i.place_id === p.id && i.start_date >= today()).length;
         const by = member(p.added_by);
@@ -774,18 +829,19 @@ function placesView() {
             <b>${esc(placeLabel(p))}</b>
             ${placeSub(p) ? `<small>${esc(placeSub(p))}</small>` : ''}
             ${p.memo ? `<span class="pl-memo">${esc(p.memo)}</span>` : ''}
+            ${tagsLine(p)}
             <span class="pl-meta">${by ? `${esc(ga(by.name))} 추가` : ''}${plans ? ` · 잡힌 일정 ${plans}개` : ''}${p.visited_at ? ` · ${md(nowKST(Date.parse(p.visited_at)).date)} 다녀옴` : ''}</span>
           </button>
           ${p.visited_at ? '' : `<button class="pl-plan" data-act="place-plan" data-id="${p.id}">일정 잡기</button>`}
         </li>`;
       }).join('')}</ul>`
-      : `<p class="empty">${state.placeFilter === 'visited' ? '다녀온 곳이 아직 없어요.' : '검색해서 가고 싶은 곳을 추가해 보세요.'}</p>`}
+      : `<p class="empty">${state.placeTag ? `#${esc(state.placeTag)} 태그가 붙은 곳이 없어요.` : state.placeFilter === 'visited' ? '다녀온 곳이 아직 없어요.' : '검색해서 가고 싶은 곳을 추가해 보세요.'}</p>`}
     </section>
   </main>`;
 }
 
 // 장소 시트: 메모, 다녀옴, 일정 잡기, 지도, 삭제
-function openPlaceSheet(p) {
+function openPlaceSheet(p, { justAdded = false } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
   wrap.innerHTML = `
@@ -794,7 +850,7 @@ function openPlaceSheet(p) {
     <div class="grab" aria-hidden="true"></div>
     <div class="sheet-head">
       <button type="button" class="linkbtn" data-close>취소</button>
-      <h2 class="sheet-title">갈 곳</h2>
+      <h2 class="sheet-title">${justAdded ? '추가했어요' : '갈 곳'}</h2>
       <button type="submit" class="linkbtn strong">저장</button>
     </div>
     <div class="place-head">
@@ -803,6 +859,7 @@ function openPlaceSheet(p) {
       ${kinfo(p)?.phone ? `<p class="ph-sub">${esc(kinfo(p).phone)}</p>` : ''}
       <a class="ph-map" href="${esc(placeUrl(p))}" target="_blank" rel="noopener">${ICON.pin}지도에서 보기</a>
     </div>
+    ${tagFieldHTML}
     <label class="field"><span>메모</span><textarea name="memo" id="place-memo" rows="2" maxlength="300" placeholder="예: 웨이팅 길다고 함, 평일 오전 추천">${esc(p.memo ?? '')}</textarea></label>
     <label class="switch"><input type="checkbox" name="visited" id="place-visited" ${p.visited_at ? 'checked' : ''}><span>다녀왔어요</span></label>
     <button type="button" class="btn primary wide" data-plan>이 장소로 일정 잡기</button>
@@ -813,6 +870,7 @@ function openPlaceSheet(p) {
   const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
   wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   requestAnimationFrame(() => wrap.classList.add('open'));
+  const getTags = tagField(form, p.tags ?? []);
   form.querySelector('[data-plan]').addEventListener('click', () => { close(); openSheet(null, { kind: 'event', place_id: p.id, title: placeLabel(p), start_date: today() }); });
   const del = form.querySelector('[data-del]');
   del.addEventListener('click', async () => {
@@ -823,7 +881,7 @@ function openPlaceSheet(p) {
     ev.preventDefault();
     const visited = form.elements.visited.checked;
     try {
-      await store.updatePlace(p.id, { memo: form.elements.memo.value.trim() || null, visited_at: visited ? p.visited_at ?? new Date().toISOString() : null });
+      await store.updatePlace(p.id, { memo: form.elements.memo.value.trim() || null, tags: getTags(), visited_at: visited ? p.visited_at ?? new Date().toISOString() : null });
       close(); render(); toast('저장했어요');
     } catch (e) { toast(e.message); }
   });
@@ -844,6 +902,7 @@ function openManualPlaceSheet() {
     </div>
     <input class="title-in" name="name" id="mp-name" placeholder="장소 이름" maxlength="120" required autocomplete="off" value="${esc(state.placeQuery ?? '')}">
     <label class="field"><span>주소 <small>선택</small></span><input name="address" id="mp-address" maxlength="200" autocomplete="off" placeholder="예: 서울 용산구 신흥로 95"></label>
+    ${tagFieldHTML}
     <label class="field"><span>메모 <small>선택</small></span><textarea name="memo" id="mp-memo" rows="2" maxlength="300"></textarea></label>
   </form>`;
   document.body.appendChild(wrap);
@@ -851,13 +910,14 @@ function openManualPlaceSheet() {
   const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
   wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   requestAnimationFrame(() => wrap.classList.add('open'));
+  const getTags = tagField(form, state.placeTag ? [state.placeTag] : []);
   setTimeout(() => form.elements.name.focus(), 250);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const f = form.elements;
     if (!f.name.value.trim()) return;
     try {
-      await store.addManualPlace({ name: f.name.value.trim(), address: f.address.value.trim() || null, memo: f.memo.value.trim() || null });
+      await store.addManualPlace({ name: f.name.value.trim(), address: f.address.value.trim() || null, memo: f.memo.value.trim() || null, tags: getTags() });
       state.placeFilter = 'want';
       close(); render(); toast('갈 곳에 추가했어요');
     } catch (e) { toast(e.message); }
@@ -1360,6 +1420,7 @@ $app.addEventListener('click', async (e) => {
     else if (act === 'lvwho') { state.lvWho = el.dataset.v; render(); }
     else if (act === 'uptab') { state.upTab = el.dataset.v; render(); window.scrollTo(0, 0); }
     else if (act === 'place-filter') { state.placeFilter = el.dataset.v; render(); }
+    else if (act === 'place-tag') { state.placeTag = el.dataset.v || null; render(); }
     else if (act === 'place-clear') { state.placeResults = null; state.placeQuery = ''; render(); }
     else if (act === 'place-manual') openManualPlaceSheet();
     else if (act === 'place-open') openPlaceSheet(store.places.find((p) => p.id === el.dataset.id));
@@ -1375,7 +1436,8 @@ $app.addEventListener('click', async (e) => {
       if (p.source === 'kakao') placeInfo.set(p.id, r);   // 방금 검색한 실시간 결과로 바로 표시
       state.placeFilter = 'want';
       render();
-      toast(`갈 곳에 추가했어요 · ${r.name}`);
+      // 저장하면서 바로 태그·메모를 달 수 있게 장소 시트를 열어 줌
+      openPlaceSheet(store.places.find((x) => x.id === p.id) ?? p, { justAdded: true });
     }
     else if (act === 'mood-add') openMoodSheet(el.dataset.day, el.dataset.emoji || null);
     else if (act === 'moodwho') { state.moodWho = el.dataset.v; state.moodHistAll = false; render(); }

@@ -20,7 +20,7 @@ export const PROFILES = {
     items: EMOTIONS, defaultKeys: ['joy', 'sad'],
   },
   daily4: {
-    key: 'daily4', name: '집중도·미루기·기분·불안 · 0~5점', max: 5, emoji: false,
+    key: 'daily4', name: '집중도·미루기·기분·불안 · 0~10점', max: 10, emoji: false,
     items: [
       { key: 'focus', label: '집중도' },
       { key: 'procrast', label: '미루기' },

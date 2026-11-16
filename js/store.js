@@ -12,6 +12,7 @@ class SupabaseStore {
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;   // 진행 중인 진정하기 (없으면 null)
   moods = [];    // 하루 감정 기록 (최근 120일)
+  moodPrivate = [];   // 내 비공개 메모 [{ day, note }]
   places = [];   // 갈 곳 목록 (카카오 장소는 id·검색어만 있음 → 화면에서 실시간 조회)
   #sb; #listeners = []; #channel = null;
 
@@ -60,7 +61,7 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest, calm, moods, places] = await Promise.all([
+    const [m, items, comps, quest, calm, moods, places, priv] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
@@ -68,8 +69,10 @@ class SupabaseStore {
       this.#sb.from('calm_sessions').select('*').is('ended_at', null).order('started_at', { ascending: false }).limit(1),
       this.#all(() => this.#sb.from('moods').select('*').gte('day', since).order('day').order('member_id')).catch(() => []),
       this.#all(() => this.#sb.from('places').select('*').order('created_at', { ascending: false }).order('id')).catch(() => []),
+      this.#all(() => this.#sb.from('mood_private').select('day,note').gte('day', since).order('day')).catch(() => []),
     ]);
     this.places = places;
+    this.moodPrivate = priv;   // 내 비공개 메모만 (보안 규칙상 상대 것은 안 옴)
     if (m.error) throw new Error(m.error.message);
     this.members = m.data; this.items = items; this.completions = comps;
     Object.assign(this, quest);
@@ -103,6 +106,7 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'calm_sessions' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'moods' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'places' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'mood_private' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -184,15 +188,20 @@ class SupabaseStore {
   }
 
   // 하루 감정 기록 (같은 날은 덮어씀)
-  async saveMood({ day, emoji, scores, note, shared }) {
+  async saveMood({ day, emoji, scores, note, shared, privateNote }) {
     const { error } = await this.#sb.from('moods')
       .upsert({ member_id: this.me.id, day, emoji, scores, note, shared }, { onConflict: 'member_id,day' });
     if (error) throw new Error(error.message);
+    const p = privateNote
+      ? await this.#sb.from('mood_private').upsert({ member_id: this.me.id, day, note: privateNote }, { onConflict: 'member_id,day' })
+      : await this.#sb.from('mood_private').delete().eq('member_id', this.me.id).eq('day', day);
+    if (p.error) throw new Error(p.error.message);
     await this.load();
   }
   async deleteMood(day) {
     const { error } = await this.#sb.from('moods').delete().eq('member_id', this.me.id).eq('day', day);
     if (error) throw new Error(error.message);
+    await this.#sb.from('mood_private').delete().eq('member_id', this.me.id).eq('day', day);
     await this.load();
   }
 
@@ -209,8 +218,8 @@ class SupabaseStore {
     await this.load();
     return data;
   }
-  async addManualPlace({ name, address, memo }) {
-    const { data, error } = await this.#sb.from('places').insert({ source: 'manual', name, address, memo }).select().single();
+  async addManualPlace({ name, address, memo, tags = [] }) {
+    const { data, error } = await this.#sb.from('places').insert({ source: 'manual', name, address, memo, tags }).select().single();
     if (error) throw new Error(error.message);
     await this.load();
     return data;
@@ -239,7 +248,7 @@ class SupabaseStore {
 }
 
 // ------------------------------------------------------------------ 데모 (이 기기에만 저장)
-const KEY = 'woori-demo-v3';
+const KEY = 'woori-demo-v4';
 
 function seed() {
   const d = nowKST().date;
@@ -316,7 +325,7 @@ function seedMoods() {
       for (const key of Object.keys(cur)) cur[key] = Math.max(0, Math.min(10, cur[key] + (rnd() - 0.5) * 3 + (base[key] - cur[key]) * 0.3));
       const scores = Object.fromEntries(Object.entries(cur).map(([key, v]) => [key, clamp(v)]));
       if (mid === 'm2') {
-        const h = (v) => Math.max(0, Math.min(5, Math.round(v / 2)));
+        const h = clamp;
         out.push({ member_id: mid, day, emoji: null, shared: rnd() > 0.15,
           scores: { focus: h(scores.calm + 1), procrast: h(10 - scores.joy), mood: h(scores.joy), anxiety: h(scores.anxious) },
           note: notes[Math.floor(rnd() * notes.length)] || null });
@@ -328,6 +337,15 @@ function seedMoods() {
     }
   }
   return out;
+}
+
+// 예시 비공개 메모 (본인만 보임)
+function seedPrivate() {
+  const d = nowKST().date;
+  return [
+    { member_id: 'm1', day: addDays(d, -1), note: '사실 회의 때 한 말이 계속 마음에 걸림' },
+    { member_id: 'm2', day: addDays(d, -2), note: '혼자 생각 정리할 시간이 필요했던 날' },
+  ];
 }
 
 // 데모용 예시 장소 (실제 앱은 카카오/OpenStreetMap 검색)
@@ -351,6 +369,7 @@ function seedPlaces() {
   const now = Date.now();
   return [DEMO_PLACES[2], DEMO_PLACES[4], DEMO_PLACES[9], DEMO_PLACES[0]].map((r, i) => ({
     id: uid(), ...r, query: null, memo: ['웨이팅 길다고 함, 평일 오전 추천', '특별전 12월까지', '자전거 빌려서 피크닉', null][i],
+    tags: [['카페', '데이트'], ['전시'], ['산책', '데이트'], ['야경', '데이트']][i],
     visited_at: i === 3 ? new Date(now - 9 * 86400000).toISOString() : null,
     added_by: i % 2 ? 'm2' : 'm1', created_at: new Date(now - (i + 1) * 86400000).toISOString(),
   }));
@@ -362,6 +381,7 @@ class DemoStore {
   xpTotals = {}; xpLog = []; rewards = [];
   calm = null;
   moods = [];
+  moodPrivate = [];
   places = [];
   #db; #listeners = [];
 
@@ -380,6 +400,8 @@ class DemoStore {
     this.calm = this.#db.calm && !this.#db.calm.ended_at ? this.#db.calm : null;
     if (!this.#db.moods) this.#db.moods = seedMoods();   // 예전 데모 데이터에 감정 기록 추가
     this.moods = this.#db.moods.filter((x) => x.member_id === this.me.id || x.shared);
+    if (!this.#db.moodPrivate) this.#db.moodPrivate = seedPrivate();
+    this.moodPrivate = this.#db.moodPrivate.filter((x) => x.member_id === this.me.id);
     if (!this.#db.places) this.#db.places = seedPlaces();
     this.places = [...this.#db.places].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
@@ -438,13 +460,16 @@ class DemoStore {
     this.#write(); this.#sync();
     return this.#db.calm;
   }
-  async saveMood({ day, emoji, scores, note, shared }) {
+  async saveMood({ day, emoji, scores, note, shared, privateNote }) {
     this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
     this.#db.moods.push({ member_id: this.me.id, day, emoji, scores, note, shared });
+    this.#db.moodPrivate = this.#db.moodPrivate.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    if (privateNote) this.#db.moodPrivate.push({ member_id: this.me.id, day, note: privateNote });
     this.#write(); this.#sync();
   }
   async deleteMood(day) {
     this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#db.moodPrivate = this.#db.moodPrivate.filter((x) => !(x.member_id === this.me.id && x.day === day));
     this.#write(); this.#sync();
   }
   // 데모 검색: 예시 장소 목록에서 찾음
@@ -457,13 +482,13 @@ class DemoStore {
   async addPlace(r) {
     if (this.#db.places.some((p) => p.source === r.source && p.source_id === r.source_id)) throw new Error('이미 갈 곳에 있어요');
     const p = { id: uid(), source: r.source, source_id: r.source_id, query: null, name: r.name, address: r.address, category: r.category,
-      lat: r.lat, lng: r.lng, url: r.url, memo: null, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
+      lat: r.lat, lng: r.lng, url: r.url, memo: null, tags: [], visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
     this.#db.places.push(p); this.#write(); this.#sync();
     return p;
   }
-  async addManualPlace({ name, address, memo }) {
+  async addManualPlace({ name, address, memo, tags = [] }) {
     const p = { id: uid(), source: 'manual', source_id: null, query: null, name, address, category: null, lat: null, lng: null, url: null,
-      memo, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
+      memo, tags, visited_at: null, added_by: this.me.id, created_at: new Date().toISOString() };
     this.#db.places.push(p); this.#write(); this.#sync();
     return p;
   }

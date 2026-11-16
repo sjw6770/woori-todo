@@ -596,3 +596,28 @@ html.calm-lock body { overflow: hidden; }
 .profopts { display: flex; flex-direction: column; gap: 6px; }
 .profopts label { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--field); font-size: 15px; font-weight: 600; cursor: pointer; }
 .profopts input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); flex: none; }
+
+/* 감정: 공개란 · 비공개란 */
+.notes2 { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.note-box { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 12px; background: var(--field); }
+.note-box.private { background: transparent; border: 1.5px dashed var(--line); }
+.nb-head { font-size: 13px; font-weight: 800; color: var(--ink); display: flex; align-items: baseline; gap: 6px; }
+.nb-head small { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0; }
+.field .note-box textarea { background: var(--surface); min-height: 56px; }
+.switch.stack span { display: flex; flex-direction: column; line-height: 1.35; }
+.switch.stack small { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.mt-note.private, .mh-note.private { display: flex; gap: 5px; color: var(--muted); }
+.mt-note.private b, .mh-note.private b { font-weight: 400; font-size: .9em; flex: none; }
+
+/* 갈 곳 태그 */
+.tagchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { padding: 6px 11px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); background: var(--surface); border: 1px solid var(--line); }
+.tag-chip[aria-pressed="true"] { background: var(--shared); border-color: var(--shared); color: #fff; }
+.tagnew { display: flex; gap: 6px; }
+.tagnew input { flex: 1; min-width: 0; }
+.tagnew .btn { flex: none; }
+.pl-tags { font-size: 13px; font-weight: 600; color: var(--shared); overflow-wrap: anywhere; }
+.tagfilter { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: -2px -16px 10px; padding: 0 16px; }
+.tagfilter::-webkit-scrollbar { display: none; }
+.tagfilter button { flex: none; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--shared); background: transparent; border: 1px solid color-mix(in srgb, var(--shared) 40%, transparent); }
+.tagfilter button[aria-pressed="true"] { background: var(--shared); color: #fff; border-color: var(--shared); }
