@@ -78,3 +78,4 @@ jobs:
           q "select status_code, left(content::text, 80) as body, created from net._http_response order by created desc limit 3"
           q "select m.name, coalesce(t.total, 0) as xp, (select count(*) from public.rewards r where r.member_id = m.id) as rewards from public.members m left join public.xp_totals t on t.member_id = m.id"
           q "select count(*) as items, count(*) filter (where kind = 'task') as quests from public.items"
+          q "select count(*) as calm_sessions, count(*) filter (where ended_at is null) as active from public.calm_sessions"

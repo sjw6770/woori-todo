@@ -235,6 +235,20 @@ async function tick() {
     }
   }
 
+  // 5) 진정 시간 종료 알림 (둘 다에게) + 12시간 넘게 열려 있는 세션 정리
+  const { data: calms } = await db.from("calm_sessions").select("id,ends_at").is("ended_at", null);
+  for (const s of (calms ?? []) as { id: string; ends_at: string }[]) {
+    const past = Date.now() - Date.parse(s.ends_at);
+    if (past > 12 * 3600000) {
+      await db.from("calm_sessions").update({ ended_at: new Date().toISOString() }).eq("id", s.id);
+    } else if (past >= 0 && past < 10 * 60000 && (await claim(`calm-end:${s.id}`))) {
+      for (const m of M) {
+        await sendTo(m.id, { title: "🕊 진정 시간이 끝났어요", body: "준비되면 앱에서 '다시 이야기하기'를 눌러 주세요", tag: "calm" });
+      }
+      log.push(`calm-end ${s.id}`);
+    }
+  }
+
   // 4) 오래된 발송 기록 정리 (매일 03시)
   if (now.min === 180) {
     await db.from("sent_log").delete().lt("sent_at", new Date(Date.now() - 3 * DAY).toISOString());
@@ -255,6 +269,30 @@ async function fromApp(req: Request, body: Record<string, string>) {
   if (body.action === "test") {
     const n = await sendTo(me.id, { title: "🔔 테스트 알림", body: "알림이 잘 오고 있어요!", tag: "test" });
     return json({ ok: true, sent: n });
+  }
+
+  // 진정하기: 요청(start) → 상대에게, 수락(accept) → 요청한 사람에게, 끝(end) → 상대에게
+  if (body.action === "calm") {
+    const { data: s } = await db.from("calm_sessions").select("*").eq("id", body.session_id).maybeSingle();
+    if (!s) return json({ error: "no session" }, 404);
+    const endKst = nowKST(Date.parse(s.ends_at));
+    let payload: Payload;
+    if (body.event === "start") {
+      if (s.from_member !== me.id) return json({ error: "forbidden" }, 403);
+      payload = {
+        title: `🕊 ${me.name}님이 잠시 진정하자고 해요`,
+        body: s.message ? `"${s.message}"\n${s.minutes}분 쉬고 ${hhmm(endKst.min)}에 다시 이야기해요` : `${s.minutes}분 쉬고 ${hhmm(endKst.min)}에 다시 이야기해요. 앱을 열어 같이 숨 골라요`,
+        tag: "calm",
+      };
+    } else if (body.event === "accept") {
+      payload = { title: `🕊 ${me.name}님도 진정하기로 했어요`, body: `${hhmm(endKst.min)}에 다시 이야기해요`, tag: "calm" };
+    } else if (body.event === "end") {
+      payload = { title: `${me.name}님이 다시 이야기할 준비가 됐어요`, body: "천천히, 차분하게 이야기해요", tag: "calm" };
+    } else return json({ error: "unknown event" }, 400);
+    if (!(await claim(`calm-${body.event}:${s.id}:${me.id}`))) return json({ ok: true, sent: 0, duplicate: true });
+    let sent = 0;
+    for (const m of members.filter((x) => x.id !== me.id)) sent += await sendTo(m.id, payload);
+    return json({ ok: true, sent });
   }
 
   // 레벨 업: 서버에서 다시 계산해서 실제로 도달했을 때만, 레벨마다 한 번만 보냄
