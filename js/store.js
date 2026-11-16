@@ -239,14 +239,14 @@ class SupabaseStore {
 }
 
 // ------------------------------------------------------------------ 데모 (이 기기에만 저장)
-const KEY = 'woori-demo-v2';
+const KEY = 'woori-demo-v3';
 
 function seed() {
   const d = nowKST().date;
   const wd = new Date(d + 'T00:00:00Z').getUTCDay();
   const members = [
-    { id: 'm1', name: '종원', color: '#3b6fd8', brief_time: '08:00', nag_time: '21:00' },
-    { id: 'm2', name: '지윤', color: '#e0607e', brief_time: '07:30', nag_time: '21:30' },
+    { id: 'm1', name: '종원', color: '#3b6fd8', brief_time: '08:00', nag_time: '21:00', mood_profile: 'emotions' },
+    { id: 'm2', name: '지윤', color: '#e0607e', brief_time: '07:30', nag_time: '21:30', mood_profile: 'daily4' },
   ];
   const base = { note: '', end_date: null, weekdays: [], nag_every: 0, created_by: 'm1', difficulty: 'normal' };
   const items = [
@@ -315,6 +315,13 @@ function seedMoods() {
       if (rnd() < 0.14) continue;               // 가끔 빠진 날
       for (const key of Object.keys(cur)) cur[key] = Math.max(0, Math.min(10, cur[key] + (rnd() - 0.5) * 3 + (base[key] - cur[key]) * 0.3));
       const scores = Object.fromEntries(Object.entries(cur).map(([key, v]) => [key, clamp(v)]));
+      if (mid === 'm2') {
+        const h = (v) => Math.max(0, Math.min(5, Math.round(v / 2)));
+        out.push({ member_id: mid, day, emoji: null, shared: rnd() > 0.15,
+          scores: { focus: h(scores.calm + 1), procrast: h(10 - scores.joy), mood: h(scores.joy), anxiety: h(scores.anxious) },
+          note: notes[Math.floor(rnd() * notes.length)] || null });
+        continue;
+      }
       const good = scores.joy + scores.calm + scores.love - scores.sad - scores.anxious - scores.angry;
       const emoji = good > 12 ? (scores.love >= 8 ? '🥰' : '😆') : good > 6 ? '😊' : good > 2 ? '😌' : good > -2 ? '😐' : scores.angry >= 6 ? '😡' : scores.anxious >= 6 ? '😰' : '😔';
       out.push({ member_id: mid, day, emoji, scores, note: notes[Math.floor(rnd() * notes.length)] || null, shared: true });

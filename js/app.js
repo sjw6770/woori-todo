@@ -6,7 +6,7 @@ import {
 import {
   DIFF, DIFF_KEYS, xpOf, questType, QUEST_LABEL, earnerOf, levelInfo, xpToReach, LEVEL_BASE, LEVEL_STEP,
 } from './quest.js';
-import { EMOTIONS, EMO, MOOD_EMOJIS, emojiLabel, series, average, chartSVG } from './mood.js';
+import { PROFILES, profileOf, MOOD_EMOJIS, emojiLabel, series, average, chartSVG } from './mood.js';
 
 const store = createStore();
 const $app = document.getElementById('app');
@@ -21,7 +21,7 @@ const state = {
   calmHidden: null,        // "잠깐 닫기"한 진정하기 세션 id
   moodWho: null,           // 감정 화면에서 보고 있는 사람 (null = 나)
   moodRange: 7,            // 그래프 기간 7 | 30
-  moodKeys: ['joy', 'sad'],// 그래프에 보이는 감정
+  moodKeys: {},            // 그래프에 보이는 항목 (기록 방식별, 없으면 기본값)
   upTab: 'list',           // 일정 탭: list | places
   placeQuery: '', placeResults: null, placeSearching: false, placeFilter: 'want',
 };
@@ -226,11 +226,16 @@ function todayView() {
 
 // ------------------------------------------------------------------ 하루 감정
 const myMood = (day) => store.moods.find((m) => m.member_id === store.me.id && m.day === day);
-const scoreText = (e, limit = 6) => EMOTIONS
-  .filter((x) => typeof e.scores?.[x.key] === 'number')
-  .sort((a, b) => (limit < 6 ? e.scores[b.key] - e.scores[a.key] : 0))
-  .slice(0, limit)
-  .map((x) => `${x.label} ${e.scores[x.key]}`).join(' · ');
+// 기록한 사람의 방식(감정 6가지 0~10 / 집중도 등 0~5)에 맞춰 점수 글자로
+const scoreText = (e, limit = 6) => {
+  const items = profileOf(member(e.member_id)).items;
+  return items
+    .filter((x) => typeof e.scores?.[x.key] === 'number')
+    .sort((a, b) => (limit < items.length ? e.scores[b.key] - e.scores[a.key] : 0))
+    .slice(0, limit)
+    .map((x) => `${x.label} ${e.scores[x.key]}`).join(' · ');
+};
+const shareLabel = (e) => (e.shared === false ? ' · 비공개' : '');
 
 // 오늘 화면 맨 아래: 감정 기록 바로가기
 function moodShortcut() {
@@ -253,26 +258,34 @@ function moodView() {
   const history = allHistory.slice(0, state.moodHistAll ? 60 : 7);
   const tabs = store.members.map((m) =>
     `<button role="tab" data-act="moodwho" data-v="${m.id}" aria-selected="${m.id === who.id}">${m.id === store.me.id ? '나' : esc(m.name)}</button>`).join('');
+  const prof = profileOf(who);
+  const keysOn = state.moodKeys[prof.key] ?? prof.defaultKeys;
 
   const todayCard = te
     ? `<section class="mtoday">
-        <span class="mt-emoji" aria-hidden="true">${esc(te.emoji || '📝')}</span>
+        ${te.emoji ? `<span class="mt-emoji" aria-hidden="true">${esc(te.emoji)}</span>` : ''}
         <div class="mt-body">
-          <p class="mt-label">오늘 기분${te.emoji ? ` · ${emojiLabel(te.emoji)}` : ''}${te.shared === false ? ' · 나만 보기' : ''}</p>
+          <p class="mt-label">${te.emoji ? `오늘 기분 · ${emojiLabel(te.emoji)}` : '오늘 기록'}${shareLabel(te)}</p>
           ${scoreText(te) ? `<p class="mt-scores">${scoreText(te)}</p>` : ''}
           ${te.note ? `<p class="mt-note">${esc(te.note)}</p>` : ''}
         </div>
         ${isMe ? `<button class="linkbtn mt-edit" data-act="mood-add" data-day="${t}">수정</button>` : ''}
       </section>`
     : isMe
-      ? `<section class="mtoday cta">
-          <p class="mt-q">오늘 하루 어땠어요?</p>
-          <div class="emoji-quick">${MOOD_EMOJIS.map(([e, l]) => `<button data-act="mood-add" data-day="${t}" data-emoji="${e}" aria-label="${l}">${e}</button>`).join('')}</div>
-        </section>`
-      : `<p class="empty">아직 오늘 감정 기록이 없어요.</p>`;
+      ? prof.emoji
+        ? `<section class="mtoday cta">
+            <p class="mt-q">오늘 하루 어땠어요?</p>
+            <div class="emoji-quick">${MOOD_EMOJIS.map(([e, l]) => `<button data-act="mood-add" data-day="${t}" data-emoji="${e}" aria-label="${l}">${e}</button>`).join('')}</div>
+          </section>`
+        : `<section class="mtoday cta">
+            <p class="mt-q">오늘 하루 어땠어요?</p>
+            <p class="mt-note">${prof.items.map((x) => x.label).join(' · ')}을 0~${prof.max}점으로 남겨요</p>
+            <button class="btn primary wide" data-act="mood-add" data-day="${t}">오늘 기록하기</button>
+          </section>`
+      : `<p class="empty">아직 오늘 기록이 없어요.</p>`;
 
   const fmt = (v) => (v == null ? '–' : v.toFixed(1));
-  const avgs = EMOTIONS.map((x) => {
+  const avgs = prof.items.map((x) => {
     const a = average(days, x.key), b = average(prev, x.key);
     const delta = a != null && b != null ? a - b : null;
     const dTxt = delta == null ? '' : Math.abs(delta) < 0.05 ? '지난 기간과 같음' : `지난 ${n}일보다 ${delta > 0 ? '▲' : '▼'}${Math.abs(delta).toFixed(1)}`;
@@ -286,12 +299,12 @@ function moodView() {
     ${todayCard}
 
     <section>
-      <h2>감정 변화 <span>${n}일 중 ${recorded}일 기록</span>
+      <h2>변화 <span>${n}일 중 ${recorded}일 · 0~${prof.max}점</span>
         <span class="range" role="group" aria-label="기간">${[7, 30].map((r) => `<button data-act="mood-range" data-v="${r}" aria-pressed="${n === r}">${r}일</button>`).join('')}</span>
       </h2>
-      ${recorded ? `<ul class="mavg">${avgs}</ul>` : ''}
-      <div class="mc-keys" role="group" aria-label="그래프에 보일 감정">
-        ${EMOTIONS.map((x) => `<button data-act="mood-key" data-v="${x.key}" aria-pressed="${state.moodKeys.includes(x.key)}"><i style="background:var(--emo-${x.key})"></i>${x.label}</button>`).join('')}
+      ${recorded ? `<ul class="mavg ${prof.items.length === 4 ? 'four' : ''}">${avgs}</ul>` : ''}
+      <div class="mc-keys" role="group" aria-label="그래프에 보일 항목">
+        ${prof.items.map((x) => `<button data-act="mood-key" data-p="${prof.key}" data-v="${x.key}" aria-pressed="${keysOn.includes(x.key)}"><i style="background:var(--emo-${x.key})"></i>${x.label}</button>`).join('')}
       </div>
       <div class="mchart" tabindex="0" aria-label="감정 점수 그래프. 좌우 화살표로 날짜별 점수를 볼 수 있어요">
         <div class="mc-host"></div>
@@ -303,8 +316,8 @@ function moodView() {
       <h2>기록 <span>${allHistory.length}일 기록함</span></h2>
       ${history.length ? `<ul class="mhist">${history.map((e) => `
         <li><button class="mh-row" ${isMe ? `data-act="mood-add" data-day="${e.day}"` : 'disabled'}>
-          <span class="mh-emoji" aria-hidden="true">${esc(e.emoji || '·')}</span>
-          <span class="mh-body"><span class="mh-date">${md(e.day)} ${W[dow(e.day)]}${e.emoji ? ` · ${emojiLabel(e.emoji)}` : ''}${e.shared === false ? ' · 나만 보기' : ''}</span>
+          ${prof.emoji ? `<span class="mh-emoji" aria-hidden="true">${esc(e.emoji || '·')}</span>` : ''}
+          <span class="mh-body"><span class="mh-date">${md(e.day)} ${W[dow(e.day)]}${e.emoji ? ` · ${emojiLabel(e.emoji)}` : ''}${shareLabel(e)}</span>
             ${scoreText(e) ? `<span class="mh-scores">${scoreText(e)}</span>` : ''}
             ${e.note ? `<span class="mh-note">${esc(e.note)}</span>` : ''}</span>
         </button></li>`).join('')}</ul>
@@ -324,8 +337,11 @@ function drawMoodChart() {
     host.innerHTML = `<p class="mc-empty">기록이 쌓이면 여기에 그래프가 그려져요.</p>`;
     return;
   }
-  const keys = EMOTIONS.map((x) => x.key).filter((k) => state.moodKeys.includes(k));
-  const { svg, xs, plot } = chartSVG(days, keys, host.clientWidth);
+  const prof = profileOf(who);
+  const on = state.moodKeys[prof.key] ?? prof.defaultKeys;
+  const keys = prof.items.map((x) => x.key).filter((k) => on.includes(k));
+  const label = Object.fromEntries(prof.items.map((x) => [x.key, x.label]));
+  const { svg, xs, plot } = chartSVG(days, keys, host.clientWidth, { max: prof.max, emoji: prof.emoji });
   host.innerHTML = svg;
   const box = host.parentElement;
   const tip = box.querySelector('.mc-tip');
@@ -342,13 +358,13 @@ function drawMoodChart() {
     tip.append(head);
     const vals = keys.filter((k) => typeof d.entry?.scores?.[k] === 'number');
     if (!vals.length) {
-      const p = document.createElement('p'); p.className = 'mt-none'; p.textContent = d.entry ? '고른 감정의 점수 없음' : '기록 없음'; tip.append(p);
+      const p = document.createElement('p'); p.className = 'mt-none'; p.textContent = d.entry ? '고른 항목의 점수 없음' : '기록 없음'; tip.append(p);
     }
     for (const k of vals) {
       const r = document.createElement('p'); r.className = 'mt-row';
       const key = document.createElement('i'); key.style.background = `var(--emo-${k})`;
       const v = document.createElement('b'); v.textContent = d.entry.scores[k];
-      const l = document.createElement('span'); l.textContent = EMO[k].label;
+      const l = document.createElement('span'); l.textContent = label[k];
       r.append(key, v, l); tip.append(r);
     }
     tip.hidden = false;
@@ -377,6 +393,10 @@ window.addEventListener('resize', () => { clearTimeout(moodResizeT); moodResizeT
 // 감정 기록 시트
 function openMoodSheet(day = today(), presetEmoji = null) {
   const p = partner();
+  const prof = profileOf(store.me);
+  const mid = Math.round(prof.max / 2);
+  // 새 기록의 공개 여부는 내가 마지막에 고른 값을 따라감
+  const lastShared = store.moods.filter((m) => m.member_id === store.me.id).sort((a, b) => b.day.localeCompare(a.day))[0]?.shared ?? true;
   const wrap = document.createElement('div');
   wrap.className = 'sheet-wrap';
   wrap.innerHTML = `
@@ -389,22 +409,27 @@ function openMoodSheet(day = today(), presetEmoji = null) {
       <button type="submit" class="linkbtn strong">저장</button>
     </div>
     <label class="field"><span>날짜</span><input type="date" name="day" id="mood-day" max="${today()}" value="${day}" required></label>
-    <div class="field"><span>오늘의 기분</span>
+    ${prof.emoji ? `<div class="field"><span>오늘의 기분</span>
       <div class="emoji-grid" role="radiogroup" aria-label="기분 이모지">${MOOD_EMOJIS.map(([e, l]) =>
         `<label><input type="radio" name="emoji" value="${e}"><span><b aria-hidden="true">${e}</b><small>${l}</small></span></label>`).join('')}</div>
-    </div>
-    <div class="field"><span>감정 점수 <small>0~10 · 느낀 것만</small></span>
-      <div class="sliders">${EMOTIONS.map((x) => `
+    </div>` : ''}
+    <div class="field"><span>${prof.emoji ? '감정 점수' : '오늘 점수'} <small>0~${prof.max} · ${prof.emoji ? '느낀 것만' : '매길 것만'}</small></span>
+      <div class="sliders">${prof.items.map((x) => `
         <div class="sl-row" data-k="${x.key}" data-set="0">
           <span class="sl-name"><i style="background:var(--emo-${x.key})"></i>${x.label}</span>
-          <input type="range" min="0" max="10" step="1" value="5" name="s-${x.key}" id="s-${x.key}" aria-label="${x.label} 점수" style="--c:var(--emo-${x.key})">
+          <input type="range" min="0" max="${prof.max}" step="1" value="${mid}" name="s-${x.key}" id="s-${x.key}" aria-label="${x.label} 점수 0~${prof.max}" style="--c:var(--emo-${x.key})">
           <button type="button" class="sl-val" data-clear="${x.key}" aria-label="${x.label} 점수 지우기">–</button>
         </div>`).join('')}
       </div>
       <p class="hint">점수 숫자를 누르면 지워져요.</p>
     </div>
     <label class="field"><span>이유 <small>간단히</small></span><textarea name="note" id="mood-note" rows="3" maxlength="300" placeholder="예: 프로젝트 마감해서 홀가분, 퇴근길 지하철이 너무 붐빔"></textarea></label>
-    ${p ? `<label class="switch"><input type="checkbox" name="shared" id="mood-shared"><span>${esc(p.name)}에게 보여주기</span></label>` : ''}
+    ${p ? `<div class="field"><span>공개 범위</span>
+      <div class="seg2 share" role="radiogroup" aria-label="공개 범위">
+        <label><input type="radio" name="share" value="public" id="mood-public"><span>공개<small>${esc(p.name)}도 볼 수 있어요</small></span></label>
+        <label><input type="radio" name="share" value="private" id="mood-private"><span>비공개<small>나만 봐요</small></span></label>
+      </div>
+    </div>` : ''}
     <button type="button" class="btn danger" data-del hidden>이 날 기록 삭제</button>
   </form>`;
   document.body.appendChild(wrap);
@@ -421,11 +446,12 @@ function openMoodSheet(day = today(), presetEmoji = null) {
   };
   const fill = (d) => {
     const e = myMood(d);
-    form.querySelector('[data-mtitle]').textContent = d === today() ? '오늘 감정' : `${md(d)} 감정`;
+    form.querySelector('[data-mtitle]').textContent = d === today() ? '오늘 기록' : `${md(d)} 기록`;
     form.querySelectorAll('[name=emoji]').forEach((r) => { r.checked = r.value === (e?.emoji ?? (d === day ? presetEmoji : null)); });
     form.querySelectorAll('.sl-row').forEach((row) => setRow(row, e?.scores?.[row.dataset.k] ?? null));
     form.elements.note.value = e?.note ?? '';
-    if (form.elements.shared) form.elements.shared.checked = e ? e.shared !== false : true;
+    const shared = e ? e.shared !== false : lastShared !== false;
+    form.querySelectorAll('[name=share]').forEach((r) => { r.checked = r.value === (shared ? 'public' : 'private'); });
     const del = form.querySelector('[data-del]');
     del.hidden = !e; delete del.dataset.armed; del.textContent = '이 날 기록 삭제';
   };
@@ -447,14 +473,15 @@ function openMoodSheet(day = today(), presetEmoji = null) {
     if (!d || d > today()) { toast('오늘이나 지난 날짜만 기록할 수 있어요'); return; }
     const scores = {};
     form.querySelectorAll('.sl-row[data-set="1"]').forEach((row) => { scores[row.dataset.k] = Number(row.querySelector('input').value); });
-    const emoji = form.querySelector('[name=emoji]:checked')?.value ?? null;
-    if (!emoji && !Object.keys(scores).length) { toast('기분 이모지나 감정 점수를 하나 이상 남겨 주세요'); return; }
+    const emoji = prof.emoji ? form.querySelector('[name=emoji]:checked')?.value ?? null : null;
+    if (!emoji && !Object.keys(scores).length) { toast(prof.emoji ? '기분 이모지나 감정 점수를 하나 이상 남겨 주세요' : '점수를 하나 이상 매겨 주세요'); return; }
+    const shared = form.querySelector('[name=share]:checked')?.value !== 'private';
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
     try {
-      await store.saveMood({ day: d, emoji, scores, note: f.note.value.trim() || null, shared: f.shared ? f.shared.checked : true });
+      await store.saveMood({ day: d, emoji, scores, note: f.note.value.trim() || null, shared });
       state.moodWho = store.me.id;
       close(); render();
-      toast('감정을 기록했어요');
+      toast(shared ? '기록했어요' : '비공개로 기록했어요');
     } catch (e) { toast(e.message); btn.disabled = false; }
   });
 }
@@ -881,6 +908,13 @@ function settingsView() {
       <h2>매일 알림 시간</h2>
       <label class="field inline"><span>아침 브리핑<small>오늘 할일과 약속을 정리해서 알려줘요</small></span><input type="time" value="${hm(me.brief_time)}" data-pref="brief_time"></label>
       <label class="field inline"><span>저녁 리마인드<small>못 끝낸 할일이 있으면 알려줘요</small></span><input type="time" value="${hm(me.nag_time)}" data-pref="nag_time"></label>
+    </section>
+    <section class="card">
+      <h2>내 감정 기록 방식</h2>
+      <div class="profopts" role="radiogroup" aria-label="감정 기록 방식">${Object.values(PROFILES).map((pr) => `
+        <label><input type="radio" name="mood_profile" value="${pr.key}" data-moodprof ${profileOf(me).key === pr.key ? 'checked' : ''}><span>${pr.name}</span></label>`).join('')}
+      </div>
+      <p class="hint">바꿔도 지난 기록은 그대로 남아요. 그래프는 지금 방식의 항목만 보여줘요.</p>
     </section>
     ${store.demo ? `
     <section class="card">
@@ -1348,8 +1382,9 @@ $app.addEventListener('click', async (e) => {
     else if (act === 'mood-more') { state.moodHistAll = true; render(); }
     else if (act === 'mood-range') { state.moodRange = Number(el.dataset.v); render(); }
     else if (act === 'mood-key') {
-      const k = el.dataset.v;
-      state.moodKeys = state.moodKeys.includes(k) ? state.moodKeys.filter((x) => x !== k) : [...state.moodKeys, k];
+      const k = el.dataset.v, pk = el.dataset.p;
+      const cur = state.moodKeys[pk] ?? PROFILES[pk].defaultKeys;
+      state.moodKeys[pk] = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
       render();
     }
     else if (act === 'calm-open') openCalmSheet();
@@ -1372,6 +1407,10 @@ $app.addEventListener('click', async (e) => {
 });
 
 $app.addEventListener('change', async (e) => {
+  if (e.target.matches('[data-moodprof]')) {
+    try { await store.updateMe({ mood_profile: e.target.value }); render(); toast('감정 기록 방식을 바꿨어요'); } catch (err) { toast(err.message); }
+    return;
+  }
   const el = e.target.closest('[data-pref]');
   if (!el || !el.value) return;
   try { await store.updateMe({ [el.dataset.pref]: el.value }); toast('시간을 바꿨어요'); } catch (err) { toast(err.message); }

@@ -13,6 +13,26 @@ export const EMOTIONS = [
 ];
 export const EMO = Object.fromEntries(EMOTIONS.map((e, i) => [e.key, { ...e, slot: i + 1 }]));
 
+// 사람마다 기록 방식이 다름 (members.mood_profile). 키를 바꾸려면 supabase/migrations/006 의 valid_mood_scores 도 같이.
+export const PROFILES = {
+  emotions: {
+    key: 'emotions', name: '감정 6가지 · 0~10점 · 기분 이모지', max: 10, emoji: true,
+    items: EMOTIONS, defaultKeys: ['joy', 'sad'],
+  },
+  daily4: {
+    key: 'daily4', name: '집중도·미루기·기분·불안 · 0~5점', max: 5, emoji: false,
+    items: [
+      { key: 'focus', label: '집중도' },
+      { key: 'procrast', label: '미루기' },
+      { key: 'mood', label: '기분' },
+      { key: 'anxiety', label: '불안' },
+    ],
+    defaultKeys: ['focus', 'procrast', 'mood', 'anxiety'],
+  },
+};
+export const profileOf = (member) => PROFILES[member?.mood_profile] ?? PROFILES.emotions;
+const LABEL = Object.fromEntries(Object.values(PROFILES).flatMap((p) => p.items.map((i) => [i.key, i.label])));
+
 export const MOOD_EMOJIS = [
   ['😆', '신남'], ['😊', '좋음'], ['🥰', '사랑'], ['😌', '편안'], ['😐', '그저 그럼'],
   ['😴', '피곤'], ['😔', '울적'], ['😢', '슬픔'], ['😰', '불안'], ['😡', '화남'],
@@ -40,26 +60,28 @@ export function average(days, key) {
 
 // 꺾은선 그래프 (SVG). 기록 없는 날은 선이 끊김.
 // 반환: { svg, xs } — xs 는 날짜별 x 좌표 (툴팁용)
-export function chartSVG(days, keys, width) {
+export function chartSVG(days, keys, width, { max = 10, emoji = true } = {}) {
   const n = days.length;
-  const showEmoji = n <= 7;
+  const showEmoji = emoji && n <= 7;
+  const weekday = n <= 7;
   const H = showEmoji ? 214 : 188;
   const m = { l: 24, r: 50, t: 10, b: showEmoji ? 50 : 24 };
   const pw = Math.max(80, width - m.l - m.r);
   const ph = H - m.t - m.b;
   const x = (i) => m.l + (n === 1 ? pw / 2 : (i * pw) / (n - 1));
-  const y = (v) => m.t + ((10 - v) / 10) * ph;
+  const y = (v) => m.t + ((max - v) / max) * ph;
   const out = [];
 
-  // 눈금 (0, 5, 10)
-  for (const v of [0, 5, 10]) {
+  // 눈금 (0~10 은 0·5·10, 0~5 는 0·1·…·5)
+  const ticks = max === 10 ? [0, 5, 10] : Array.from({ length: max + 1 }, (_, i) => i);
+  for (const v of ticks) {
     out.push(`<line class="mc-grid${v === 0 ? ' base' : ''}" x1="${m.l}" x2="${m.l + pw}" y1="${y(v)}" y2="${y(v)}"/>`);
     out.push(`<text class="mc-tick" x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`);
   }
   // x 축 라벨
   days.forEach((d, i) => {
-    const label = showEmoji ? W[dow(d.day)] : (i === 0 || i === n - 1 || i === Math.floor((n - 1) / 2)) ? `${Number(d.day.slice(5, 7))}/${Number(d.day.slice(8))}` : '';
-    if (label) out.push(`<text class="mc-tick" x="${x(i)}" y="${m.t + ph + 16}" text-anchor="${!showEmoji && i === 0 ? 'start' : !showEmoji && i === n - 1 ? 'end' : 'middle'}">${label}</text>`);
+    const label = weekday ? W[dow(d.day)] : (i === 0 || i === n - 1 || i === Math.floor((n - 1) / 2)) ? `${Number(d.day.slice(5, 7))}/${Number(d.day.slice(8))}` : '';
+    if (label) out.push(`<text class="mc-tick" x="${x(i)}" y="${m.t + ph + 16}" text-anchor="${!weekday && i === 0 ? 'start' : !weekday && i === n - 1 ? 'end' : 'middle'}">${label}</text>`);
     if (showEmoji && d.entry?.emoji) out.push(`<text class="mc-emoji" x="${x(i)}" y="${m.t + ph + 40}" text-anchor="middle">${esc(d.entry.emoji)}</text>`);
   });
 
@@ -84,7 +106,7 @@ export function chartSVG(days, keys, width) {
       if (typeof v !== 'number') return;
       const prev = days[i - 1]?.entry?.scores?.[k], next = days[i + 1]?.entry?.scores?.[k];
       const lonely = typeof prev !== 'number' && typeof next !== 'number';
-      if (showEmoji || lonely || i === last.i) out.push(`<circle class="mc-dot" cx="${x(i)}" cy="${y(v)}" r="4" style="fill:var(--emo-${k})"/>`);
+      if (weekday || lonely || i === last.i) out.push(`<circle class="mc-dot" cx="${x(i)}" cy="${y(v)}" r="4" style="fill:var(--emo-${k})"/>`);
     });
     ends.push({ k, y: y(last.v), x: x(last.i) });
   }
@@ -93,7 +115,7 @@ export function chartSVG(days, keys, width) {
   for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
   const over = ends.length ? ends[ends.length - 1].y - (m.t + ph + 4) : 0;
   if (over > 0) ends.forEach((e) => { e.y -= over; });
-  for (const e of ends) out.push(`<text class="mc-end" x="${m.l + pw + 8}" y="${e.y + 4}">${EMO[e.k].label}</text>`);
+  for (const e of ends) out.push(`<text class="mc-end" x="${m.l + pw + 8}" y="${e.y + 4}">${LABEL[e.k]}</text>`);
 
   // 십자선 (툴팁용, 처음엔 숨김)
   out.push(`<line class="mc-cross" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" visibility="hidden"/>`);
