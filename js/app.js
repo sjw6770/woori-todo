@@ -3,6 +3,9 @@ import { createStore } from './store.js';
 import {
   nowKST, addDays, dow, occursOn, isDone, overdue, toMin, repeatLabel,
 } from './schedule.js';
+import {
+  DIFF, DIFF_KEYS, xpOf, questType, QUEST_LABEL, earnerOf, levelInfo, xpToReach, LEVEL_BASE, LEVEL_STEP,
+} from './quest.js';
 
 const store = createStore();
 const $app = document.getElementById('app');
@@ -10,9 +13,10 @@ const W = ['일', '월', '화', '수', '목', '금', '토'];
 const SHARED = '#2f9e7a';
 
 const state = {
-  view: 'today',          // today | upcoming | settings
+  view: 'today',          // today | upcoming | level | settings
   date: nowKST().date,     // 오늘 화면에서 보고 있는 날짜
   filter: 'all',           // all | <memberId> | shared
+  lvWho: null,             // 레벨 화면에서 보고 있는 사람 (null = 나)
 };
 
 // ------------------------------------------------------------------ 유틸
@@ -30,6 +34,20 @@ const ro = (name = '') => {
   const jong = c >= 0 && c < 11172 ? c % 28 : 0;
   return name + (jong === 0 || jong === 8 ? '로' : '으로');
 };
+// 이름 + 이/가
+const ga = (name = '') => {
+  const c = name.charCodeAt(name.length - 1) - 0xac00;
+  return name + (c >= 0 && c < 11172 && c % 28 ? '이' : '가');
+};
+
+// ---- 경험치 · 레벨
+const totalOf = (mid) => store.xpTotals[mid] ?? 0;
+const levelOf = (mid) => levelInfo(totalOf(mid));
+const todayXp = (mid) => store.xpLog
+  .filter((x) => x.member_id === mid && nowKST(Date.parse(x.created_at)).date === today())
+  .reduce((s, x) => s + x.xp, 0);
+const rewardsOf = (mid) => store.rewards.filter((r) => r.member_id === mid).sort((a, b) => a.level - b.level);
+const levelsNow = () => Object.fromEntries(store.members.map((m) => [m.id, levelOf(m.id).level]));
 const isStandalone =() => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -73,6 +91,10 @@ function row(item, date, { showDate = false } = {}) {
   if (rl) meta.push(`<span class="ico">${ICON.repeat}${rl}</span>`);
   if (item.remind_before != null && item.time) meta.push(`<span class="ico">${ICON.bell}${remindText(item)}</span>`);
   if (item.note) meta.push(`<span class="note">${esc(item.note)}</span>`);
+  const diff = DIFF[item.difficulty] ? item.difficulty : 'normal';
+  const xp = item.kind === 'task'
+    ? `<span class="xp" data-d="${diff}" aria-label="${DIFF[diff].label}, 경험치 ${xpOf(item)}"><b>+${xpOf(item)}</b><small>${DIFF[diff].label}</small></span>`
+    : '';
   return `
   <li class="row ${item.kind} ${done ? 'done' : ''}" style="--c1:${c1};--c2:${c2}">
     <span class="stripe" aria-hidden="true"></span>
@@ -81,6 +103,7 @@ function row(item, date, { showDate = false } = {}) {
       <span class="line1">${item.time ? `<span class="time">${hm(item.time)}</span>` : ''}${item.kind === 'event' ? '<span class="kind">약속</span>' : ''}<span class="title">${esc(item.title)}</span></span>
       ${meta.length ? `<span class="meta">${meta.join('')}</span>` : ''}
     </button>
+    ${xp}
   </li>`;
 }
 
@@ -118,15 +141,52 @@ function filterChips() {
     `<button role="tab" data-act="filter" data-v="${v}" aria-selected="${state.filter === v}">${esc(l)}</button>`).join('')}</div>`;
 }
 
+// 오늘 화면 위쪽: 내 레벨 카드 (누르면 레벨 탭)
+function levelCard() {
+  const me = store.me;
+  const info = levelOf(me.id);
+  const p = partner();
+  const mine = rewardsOf(me.id);
+  const pending = mine.filter((r) => r.level <= info.level && !r.claimed_at).length;
+  const next = mine.find((r) => r.level > info.level);
+  const foot = pending ? `<b class="pending">받을 보상 ${pending}개</b>`
+    : next ? `<span class="lv-next">Lv.${next.level} 보상 · ${esc(next.title)}</span>`
+    : '<span class="lv-next">레벨 보상을 정해 보세요</span>';
+  return `
+  <button class="lvcard" data-act="view" data-v="level" style="--c:${me.color}" aria-label="내 레벨 ${info.level}, ${info.into}/${info.need} 경험치. 레벨 화면 열기">
+    <span class="lv-top">
+      <span class="lv-num"><small>Lv.</small>${info.level}</span>
+      <span class="lv-name">${esc(me.name)}<small>${info.into} / ${info.need} XP</small></span>
+      ${p ? `<span class="lv-partner"><b style="background:${p.color}"></b>${esc(p.name)} Lv.${levelOf(p.id).level}</span>` : ''}
+    </span>
+    <span class="lv-bar"><i style="width:${Math.max(2, info.pct * 100)}%"></i></span>
+    <span class="lv-foot">${foot}<span class="lv-today">오늘 +${todayXp(me.id)} XP</span></span>
+  </button>`;
+}
+
+// 퀘스트 묶음 (남은 것 먼저, 끝낸 것은 아래에 흐리게)
+function questSection(type, list, d) {
+  if (!list.length) return '';
+  const open = list.filter((i) => !isDone(store.completions, i.id, d));
+  const closed = list.filter((i) => isDone(store.completions, i.id, d));
+  const left = open.reduce((s, i) => s + xpOf(i), 0);
+  return `
+  <section><h2>${QUEST_LABEL[type]} <span>${closed.length}/${list.length}${left ? ` · +${left} XP 남음` : ' · 모두 클리어'}</span></h2>
+    ${open.length ? `<ul>${open.map((i) => row(i, d)).join('')}</ul>` : ''}
+    ${closed.length ? `<ul class="closed">${closed.map((i) => row(i, d)).join('')}</ul>` : ''}
+  </section>`;
+}
+
 function todayView() {
   const d = state.date;
   const all = store.items.filter((i) => occursOn(i, d));
   const list = all.filter(passFilter).sort(sortByTime);
-  const late = d === today() ? overdue(store.items, store.completions, d).filter(passFilter).sort((a, b) => a.start_date.localeCompare(b.start_date)) : [];
+  // 완료 기록은 최근 120일치만 불러오므로 그보다 오래된 할일은 밀린 목록에서 제외
+  const late = d === today() ? overdue(store.items, store.completions, d).filter((i) => i.start_date >= addDays(d, -120)).filter(passFilter).sort((a, b) => a.start_date.localeCompare(b.start_date)) : [];
   const events = list.filter((i) => i.kind === 'event');
   const tasks = list.filter((i) => i.kind === 'task');
-  const open = tasks.filter((i) => !isDone(store.completions, i.id, d));
-  const closed = tasks.filter((i) => isDone(store.completions, i.id, d));
+  const daily = tasks.filter((i) => questType(i) === 'daily');
+  const sub = tasks.filter((i) => questType(i) === 'sub');
   const rd = relDay(d);
 
   return `
@@ -137,17 +197,199 @@ function todayView() {
       <button class="iconbtn" data-act="day" data-n="1" aria-label="다음 날">${ICON.right}</button>
     </div>
     ${d !== today() ? '<button class="linkbtn" data-act="day" data-n="0">오늘로 돌아가기</button>' : ''}
+    ${levelCard()}
     ${progressBar(all.filter((i) => i.kind === 'task'), d)}
   </header>
   ${filterChips()}
   <main class="lists">
-    ${late.length ? `<section><h2 class="warn">밀린 할일 <span>${late.length}</span></h2><ul>${late.map((i) => row(i, i.start_date, { showDate: true })).join('')}</ul></section>` : ''}
+    ${late.length ? `<section><h2 class="warn">밀린 퀘스트 <span>${late.length}</span></h2><ul>${late.map((i) => row(i, i.start_date, { showDate: true })).join('')}</ul></section>` : ''}
     ${events.length ? `<section><h2>약속</h2><ul>${events.map((i) => row(i, d)).join('')}</ul></section>` : ''}
-    <section><h2>할일 ${tasks.length ? `<span>${open.length}개 남음</span>` : ''}</h2>
-      ${open.length ? `<ul>${open.map((i) => row(i, d)).join('')}</ul>` : tasks.length ? '<p class="empty">다 끝냈어요. 수고했어요!</p>' : `<p class="empty">이 날은 할일이 없어요.<br><button class="linkbtn" data-act="add">할일 추가하기</button></p>`}
-      ${closed.length ? `<ul class="closed">${closed.map((i) => row(i, d)).join('')}</ul>` : ''}
-    </section>
+    ${questSection('daily', daily, d)}
+    ${questSection('sub', sub, d)}
+    ${tasks.length ? '' : `<section><p class="empty">이 날은 퀘스트가 없어요.<br><button class="linkbtn" data-act="add">퀘스트 추가하기</button></p></section>`}
   </main>`;
+}
+
+// ------------------------------------------------------------------ 레벨 · 보상
+function rewardRow(r, info) {
+  const got = r.level <= info.level;
+  const by = r.created_by && r.created_by !== r.member_id && member(r.created_by) ? `${ga(member(r.created_by).name)} 걸어둔 보상` : '';
+  const state_ = !got
+    ? `<span class="rw-state">${xpToReach(r.level) - info.total} XP 남음</span>`
+    : r.claimed_at
+      ? `<button class="rw-claim claimed" data-act="claim" data-id="${r.id}" aria-label="${esc(r.title)} 받음 취소">${ICON.check}받음</button>`
+      : `<button class="rw-claim" data-act="claim" data-id="${r.id}">받기</button>`;
+  return `
+  <li class="rw ${got ? 'got' : ''} ${r.claimed_at ? 'claimed' : ''}">
+    <span class="rw-lv">Lv.${r.level}</span>
+    <button class="rw-body" data-act="reward-edit" data-id="${r.id}">
+      <span class="rw-title">${esc(r.title)}</span>
+      ${by || r.note ? `<span class="rw-by">${[by, r.note ? esc(r.note) : ''].filter(Boolean).join(' · ')}</span>` : ''}
+    </button>
+    ${state_}
+  </li>`;
+}
+
+function levelView() {
+  const who = member(state.lvWho) ?? store.me;
+  const info = levelOf(who.id);
+  const rws = rewardsOf(who.id);
+  const reached = rws.filter((r) => r.level <= info.level);
+  const ahead = rws.filter((r) => r.level > info.level);
+  const log = store.xpLog.filter((x) => x.member_id === who.id).slice(0, 15);
+  const isMe = who.id === store.me.id;
+  const tabs = store.members.map((m) =>
+    `<button role="tab" data-act="lvwho" data-v="${m.id}" aria-selected="${m.id === who.id}">${m.id === store.me.id ? '나' : esc(m.name)}</button>`).join('');
+
+  return `
+  <header class="top"><h1 class="plain">레벨</h1><p class="sub">퀘스트를 깨서 경험치를 모으고, 레벨마다 정한 보상을 받아요</p></header>
+  <div class="chips" role="tablist">${tabs}</div>
+  <main class="lists level">
+    <section class="lvhero" style="--c:${who.color}">
+      <p class="lvhero-who">${esc(who.name)}</p>
+      <p class="lvhero-num"><small>Lv.</small>${info.level}</p>
+      <span class="lv-bar big"><i style="width:${Math.max(2, info.pct * 100)}%"></i></span>
+      <p class="lvhero-meta"><span><b>${info.into}</b> / ${info.need} XP</span><span>Lv.${info.level + 1}까지 ${info.toNext} XP</span></p>
+      <p class="lvhero-total">누적 ${info.total.toLocaleString()} XP · 오늘 +${todayXp(who.id)} XP</p>
+    </section>
+
+    <section>
+      <h2>레벨 보상 <button class="linkbtn h2btn" data-act="reward-add">${isMe ? '보상 추가' : `${esc(who.name)}에게 보상 걸기`}</button></h2>
+      ${rws.length ? `
+      <ul class="road">
+        ${reached.map((r) => rewardRow(r, info)).join('')}
+        <li class="road-now" style="--c:${who.color}"><span>지금 Lv.${info.level}</span><em>다음 레벨까지 ${info.toNext} XP</em></li>
+        ${ahead.map((r) => rewardRow(r, info)).join('')}
+      </ul>`
+      : `<p class="empty">아직 정한 보상이 없어요.<br>레벨마다 받을 보상을 적어 두고 그 레벨을 향해 가 보세요.<br><button class="linkbtn" data-act="reward-add">보상 추가하기</button></p>`}
+    </section>
+
+    <section>
+      <h2>최근 경험치</h2>
+      ${log.length ? `<ul class="xplog">${log.map((x) => `
+        <li><span class="xl-title">${esc(x.title)}<small>${QUEST_LABEL[x.quest_type]} · ${md(x.occur_date)}</small></span><b>+${x.xp}</b></li>`).join('')}</ul>`
+      : '<p class="empty">퀘스트를 완료하면 여기에 쌓여요.</p>'}
+    </section>
+
+    <p class="rules">경험치: ${DIFF_KEYS.map((k) => `${DIFF[k].label} ${DIFF[k].xp}`).join(' · ')}<br>
+      다음 레벨까지 필요한 경험치는 ${LEVEL_BASE}에서 시작해 레벨마다 ${LEVEL_STEP}씩 늘어나요.<br>
+      개인 퀘스트는 담당자가, 공통 퀘스트는 체크한 사람이 경험치를 받아요.</p>
+  </main>`;
+}
+
+// 보상 추가/수정 시트
+function openRewardSheet(rw, whoId) {
+  const isNew = !rw;
+  const forId = rw?.member_id ?? whoId;
+  const suggest = () => {
+    const cur = levelOf(forId).level;
+    const used = new Set(rewardsOf(forId).map((r) => r.level));
+    let L = cur + 1;
+    while (used.has(L)) L++;
+    return L;
+  };
+  const r = rw ?? { member_id: forId, level: suggest(), title: '', note: '' };
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-wrap';
+  wrap.innerHTML = `
+  <div class="scrim" data-close></div>
+  <form class="sheet" role="dialog" aria-modal="true" aria-label="${isNew ? '새 보상' : '보상 수정'}">
+    <div class="grab" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <button type="button" class="linkbtn" data-close>취소</button>
+      <h2 class="sheet-title">${isNew ? '새 보상' : '보상 수정'}</h2>
+      <button type="submit" class="linkbtn strong">${isNew ? '추가' : '저장'}</button>
+    </div>
+    <input class="title-in" name="title" id="rw-title" placeholder="어떤 보상을 받을까요?" value="${esc(r.title)}" maxlength="200" required autocomplete="off">
+    <div class="field"><span>누가 받나요</span>
+      <div class="seg3">${store.members.map((m) => `<label><input type="radio" name="member" value="${m.id}" ${r.member_id === m.id ? 'checked' : ''}><span>${m.id === store.me.id ? '나' : esc(m.name)}</span></label>`).join('')}</div>
+    </div>
+    <label class="field"><span>레벨</span><input type="number" name="level" id="rw-level" inputmode="numeric" min="2" max="999" value="${r.level}" required></label>
+    <p class="hint" data-lvhint></p>
+    <label class="field"><span>메모</span><textarea name="note" id="rw-note" rows="2" placeholder="언제까지, 어떻게 받을지 등">${esc(r.note ?? '')}</textarea></label>
+    ${isNew ? '' : '<button type="button" class="btn danger" data-del>삭제</button>'}
+  </form>`;
+  document.body.appendChild(wrap);
+  const form = wrap.querySelector('form');
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
+  wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  requestAnimationFrame(() => wrap.classList.add('open'));
+  if (isNew) setTimeout(() => form.elements.title.focus(), 250);
+
+  const hint = form.querySelector('[data-lvhint]');
+  const updateHint = () => {
+    const mid = form.elements.member.value;
+    const info = levelOf(mid);
+    const L = Number(form.elements.level.value);
+    hint.textContent = !L || L < 2 ? '레벨은 2 이상이에요.'
+      : L <= info.level ? `이미 도달한 레벨이에요. (지금 Lv.${info.level})`
+      : `지금 Lv.${info.level} · Lv.${L}까지 ${xpToReach(L) - info.total} XP 남음`;
+  };
+  form.addEventListener('input', updateHint);
+  form.addEventListener('change', updateHint);
+  updateHint();
+
+  // 삭제는 두 번 눌러서 확인
+  const del = form.querySelector('[data-del]');
+  del?.addEventListener('click', async () => {
+    if (!del.dataset.armed) { del.dataset.armed = '1'; del.textContent = '한 번 더 누르면 삭제돼요'; return; }
+    try { await store.deleteReward(r.id); close(); render(); toast('보상을 삭제했어요'); } catch (e) { toast(e.message); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = form.elements;
+    const level = Math.round(Number(f.level.value));
+    if (!(level >= 2 && level <= 999)) { toast('레벨은 2부터 999까지 적을 수 있어요'); return; }
+    const data = { ...(isNew ? {} : { id: r.id }), member_id: f.member.value, level, title: f.title.value.trim(), note: f.note.value.trim() || null };
+    if (!data.title) return;
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    try {
+      await store.saveReward(data);
+      state.lvWho = data.member_id;
+      close(); render();
+      toast(isNew ? '보상을 추가했어요' : '보상을 저장했어요');
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  });
+}
+
+// 레벨 업 축하 화면
+function levelUpOverlay(level) {
+  const rws = rewardsOf(store.me.id).filter((r) => r.level === level);
+  const wrap = document.createElement('div');
+  wrap.className = 'lvup';
+  wrap.setAttribute('role', 'dialog');
+  wrap.setAttribute('aria-modal', 'true');
+  wrap.setAttribute('aria-labelledby', 'lvup-num');
+  wrap.style.setProperty('--c', store.me.color);
+  wrap.innerHTML = `
+    <div class="lvup-card">
+      <p class="lvup-kicker">레벨 업</p>
+      <p class="lvup-num" id="lvup-num"><small>Lv.</small>${level}</p>
+      ${rws.length
+        ? `<div class="lvup-rw"><p>이번 레벨 보상</p><ul>${rws.map((r) => `<li>${esc(r.title)}${r.created_by && r.created_by !== r.member_id && member(r.created_by) ? `<small>${ga(member(r.created_by).name)} 걸어둔 보상</small>` : ''}</li>`).join('')}</ul></div>`
+        : '<p class="lvup-none">이 레벨엔 정한 보상이 없어요.<br>다음 목표 보상을 정해 보세요.</p>'}
+      <div class="btnrow">
+        <button class="btn primary wide" data-ok>${rws.length ? '보상 확인하러 가기' : '보상 정하러 가기'}</button>
+        <button class="btn wide" data-close>닫기</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector('[data-close]').addEventListener('click', close);
+  wrap.querySelector('[data-ok]').addEventListener('click', () => { close(); state.view = 'level'; state.lvWho = store.me.id; render(); window.scrollTo(0, 0); });
+  wrap.querySelector('[data-ok]').focus();
+}
+
+// 체크 전후 레벨을 비교해서 레벨 업 처리
+function handleLevelUps(before) {
+  for (const m of store.members) {
+    const after = levelOf(m.id).level;
+    if (after <= (before[m.id] ?? after)) continue;
+    if (m.id === store.me.id) setTimeout(() => levelUpOverlay(after), 380);
+    else toast(`${m.name} Lv.${after} 달성!`);
+    store.callFn({ action: 'notify', verb: 'levelup', member_id: m.id, level: after }).catch(() => {});
+  }
 }
 
 // ------------------------------------------------------------------ 다가오는 일정
@@ -214,12 +456,12 @@ function settingsView() {
 // ------------------------------------------------------------------ 전체 화면
 function render() {
   if (!store.me) return;
-  const view = { today: todayView, upcoming: upcomingView, settings: settingsView }[state.view]();
-  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['settings', '설정']];
+  const view = { today: todayView, upcoming: upcomingView, level: levelView, settings: settingsView }[state.view]();
+  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['level', '레벨'], ['settings', '설정']];
   $app.innerHTML = `
     ${store.demo ? '<div class="demo-banner">데모 모드 · 이 기기에만 저장돼요</div>' : ''}
     <div class="screen">${view}</div>
-    ${state.view !== 'settings' ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
+    ${state.view === 'today' || state.view === 'upcoming' ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
     <nav class="tabbar">${tabs.map(([v, l]) => `<button data-act="view" data-v="${v}" aria-current="${state.view === v ? 'page' : 'false'}">${l}</button>`).join('')}</nav>`;
   updateBadge();
 }
@@ -236,8 +478,9 @@ function openSheet(item) {
   const isNew = !item;
   const it = item ?? {
     kind: 'task', title: '', note: '', owner: store.me.id, start_date: state.view === 'today' ? state.date : today(),
-    time: null, end_date: null, repeat: 'none', weekdays: [], remind_before: null, nag_every: 0,
+    time: null, end_date: null, repeat: 'none', weekdays: [], remind_before: null, nag_every: 0, difficulty: 'normal',
   };
+  const curDiff = DIFF[it.difficulty] ? it.difficulty : 'normal';
   const ownerOpts = [[store.me.id, '나'], ...(partner() ? [[partner().id, partner().name]] : []), ['', '공통']];
   const wds = it.weekdays?.length ? it.weekdays : [dow(it.start_date)];
 
@@ -259,6 +502,10 @@ function openSheet(item) {
 
     <div class="field"><span>누구</span>
       <div class="seg3">${ownerOpts.map(([v, l]) => `<label><input type="radio" name="owner" value="${v}" ${(it.owner ?? '') === v ? 'checked' : ''}><span>${esc(l)}</span></label>`).join('')}</div>
+    </div>
+
+    <div class="field" data-show="task"><span>난이도 <small data-qtype></small></span>
+      <div class="seg4">${DIFF_KEYS.map((k) => `<label><input type="radio" name="difficulty" value="${k}" ${curDiff === k ? 'checked' : ''}><span data-d="${k}">${DIFF[k].label}<b>+${DIFF[k].xp}</b></span></label>`).join('')}</div>
     </div>
 
     <div class="grid2">
@@ -321,6 +568,7 @@ function openSheet(item) {
     };
     form.querySelectorAll('[data-show]').forEach((el) => { el.hidden = !show[el.dataset.show]; });
     form.elements.title.placeholder = kind === 'event' ? '어떤 약속인가요?' : '무엇을 할까요?';
+    form.querySelector('[data-qtype]').textContent = `· ${rep === 'none' ? '서브 퀘스트' : '데일리 퀘스트'}`;
   }
   form.addEventListener('change', sync);
   sync();
@@ -350,6 +598,7 @@ function openSheet(item) {
       repeat, weekdays: repeat === 'weekly' ? [...form.querySelectorAll('[name=wd]:checked')].map((x) => Number(x.value)) : [],
       end_date: repeat !== 'none' && f.end_date.value ? f.end_date.value : null,
       remind_before: remind, nag_every: kind === 'task' && remind != null ? Number(f.nag_every.value) : 0,
+      difficulty: kind === 'task' ? f.difficulty.value : 'normal',
     };
     if (!data.title) return;
     if (repeat === 'weekly' && !data.weekdays.length) { toast('반복할 요일을 하나 이상 고르세요'); return; }
@@ -399,10 +648,27 @@ $app.addEventListener('click', async (e) => {
       const done = !isDone(store.completions, id, date);
       el.closest('.row').classList.toggle('done', done);
       if (done && navigator.vibrate) navigator.vibrate(10);
+      const before = levelsNow();
       await store.toggle(id, date, done);
       setTimeout(render, done ? 320 : 0);
       const item = store.items.find((i) => i.id === id);
+      if (item?.kind === 'task') {
+        const earner = member(earnerOf(item, store.me.id));
+        const who = earner && earner.id !== store.me.id ? `${earner.name} ` : '';
+        toast(`${who}${done ? '+' : '−'}${xpOf(item)} XP · ${item.title}`);
+      }
       if (done && item && item.owner !== store.me.id) store.callFn({ action: 'notify', verb: 'done', item_id: id }).catch(() => {});
+      if (done) handleLevelUps(before);
+    }
+    else if (act === 'lvwho') { state.lvWho = el.dataset.v; render(); }
+    else if (act === 'reward-add') openRewardSheet(null, state.lvWho ?? store.me.id);
+    else if (act === 'reward-edit') openRewardSheet(store.rewards.find((r) => r.id === el.dataset.id));
+    else if (act === 'claim') {
+      const r = store.rewards.find((x) => x.id === el.dataset.id);
+      const claim = !r.claimed_at;
+      await store.claimReward(r.id, claim);
+      render();
+      toast(claim ? `보상을 받았어요 · ${r.title}` : '받음 표시를 취소했어요');
     }
     else if (act === 'push') await enablePush();
     else if (act === 'testpush') { const r = await store.callFn({ action: 'test' }); toast(r?.sent ? '테스트 알림을 보냈어요' : '등록된 기기가 없어요. 알림을 다시 켜 보세요'); }

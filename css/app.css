@@ -10,6 +10,12 @@
   --warn: #b5601c;
   --danger: #c23b3b;
   --on-ink: #ffffff;
+  --gold: #9a6608;        /* 경험치 글자 */
+  --gold-bg: #fbf1dc;     /* 경험치 배지 바탕 */
+  --gold-fill: #e8ac2c;   /* 획득한 경험치 · 보상 받기 버튼 */
+  --on-gold: #2a1f05;
+  --epic: #6f45c2;
+  --epic-bg: #efe8fb;
   --shadow: 0 6px 24px rgba(29, 36, 32, .14);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
@@ -19,6 +25,7 @@
   :root {
     --bg: #141816; --surface: #1d2320; --field: #262d29; --ink: #e7ece9; --muted: #95a09a;
     --line: #2c3430; --strong-line: #46504a; --warn: #e39550; --danger: #ef6b6b; --on-ink: #141816;
+    --gold: #e9b95a; --gold-bg: #362d1b; --gold-fill: #e5b351; --on-gold: #241a04; --epic: #bca2f4; --epic-bg: #2d2640;
     --shadow: 0 6px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
@@ -210,4 +217,115 @@ svg { width: 1em; height: 1em; display: block; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
+}
+
+/* =====================================================================
+   퀘스트 · 경험치 · 레벨
+   ===================================================================== */
+
+/* 행 오른쪽 경험치 배지 */
+.xp {
+  flex: none; align-self: center; min-width: 46px; padding: 4px 6px; border-radius: 9px;
+  display: flex; flex-direction: column; align-items: center; line-height: 1.15;
+  background: var(--gold-bg); color: var(--gold); font-variant-numeric: tabular-nums;
+}
+.xp b { font-size: 14px; font-weight: 800; }
+.xp small { font-size: 10.5px; font-weight: 600; opacity: .85; }
+.xp[data-d="epic"] { background: var(--epic-bg); color: var(--epic); }
+.row.done .xp { background: var(--gold-fill); color: var(--on-gold); }
+.row.done .xp[data-d="epic"] { background: var(--epic); color: var(--surface); }
+
+/* 오늘 화면 레벨 카드 */
+.lvcard {
+  width: 100%; margin-top: 14px; padding: 14px 16px; border-radius: 16px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 10px; text-align: left;
+}
+.lvcard:active { transform: scale(.99); }
+.lv-top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lv-num { font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.lv-num small, .lvhero-num small, .lvup-num small { font-size: .4em; font-weight: 800; color: var(--c); margin-right: 1px; letter-spacing: 0; }
+.lv-name { display: flex; flex-direction: column; font-weight: 700; min-width: 0; }
+.lv-name small { font-size: 13px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lv-partner { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.lv-partner b { width: 8px; height: 8px; border-radius: 50%; }
+.lv-bar { display: block; height: 8px; border-radius: 5px; background: var(--field); overflow: hidden; }
+.lv-bar i { display: block; height: 100%; border-radius: inherit; background: var(--c); transition: width .5s cubic-bezier(.2, .8, .2, 1); }
+.lv-bar.big { height: 12px; border-radius: 7px; }
+.lv-foot { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); }
+.lv-next { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lv-foot .pending { color: var(--gold); font-weight: 800; }
+.lv-today { flex: none; font-weight: 700; color: var(--gold); font-variant-numeric: tabular-nums; }
+
+/* 레벨 화면 */
+.lvhero { background: var(--surface); border-radius: 20px; padding: 20px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+.lvhero p { margin: 0; }
+.lvhero-who { font-size: 15px; font-weight: 700; color: var(--muted); }
+.lvhero-num { font-size: 76px; font-weight: 800; line-height: .95; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
+.lvhero-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lvhero-meta b { color: var(--ink); font-weight: 800; }
+.lvhero-total { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lists .h2btn { margin-left: auto; font-size: 14px; padding: 0; }
+
+.road .rw { display: flex; align-items: center; gap: 12px; padding: 12px 14px; position: relative; }
+.road li + li { border-top: 1px solid var(--line); }
+.rw-lv { flex: none; min-width: 50px; font-size: 15px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rw.got .rw-lv { color: var(--gold); }
+.rw-body { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.rw-title { font-weight: 600; overflow-wrap: anywhere; }
+.rw-by { font-size: 13px; color: var(--muted); }
+.rw.claimed .rw-title { color: var(--muted); }
+.rw-state { flex: none; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rw-claim { flex: none; padding: 7px 14px; border-radius: 999px; font-size: 14px; font-weight: 800; background: var(--gold-fill); color: var(--on-gold); }
+.rw-claim.claimed { display: inline-flex; align-items: center; gap: 3px; background: var(--field); color: var(--muted); font-weight: 700; padding: 7px 11px; }
+.road-now {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 14px;
+  background: color-mix(in srgb, var(--c) 12%, var(--surface)); font-size: 13px;
+}
+.road-now span { font-weight: 800; color: var(--c); }
+.road-now em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.xplog li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; }
+.xplog li + li { border-top: 1px solid var(--line); }
+.xl-title { display: flex; flex-direction: column; min-width: 0; font-weight: 600; }
+.xl-title small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.xplog b { color: var(--gold); font-weight: 800; font-variant-numeric: tabular-nums; }
+.rules { margin: 22px 4px 0; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
+
+/* 시트: 난이도 선택 · 보상 시트 제목 */
+.seg4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; background: var(--field); border-radius: 10px; padding: 3px; }
+.seg4 input { position: absolute; opacity: 0; pointer-events: none; }
+.seg4 span { display: flex; flex-direction: column; align-items: center; padding: 6px 2px; border-radius: 8px; font-size: 13px; font-weight: 700; color: var(--muted); cursor: pointer; line-height: 1.25; }
+.seg4 span b { font-size: 12px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+.seg4 span[data-d="epic"] b { color: var(--epic); }
+.seg4 input:checked + span { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.seg4 input:focus-visible + span { outline: 2px solid var(--ink); }
+.sheet-title { margin: 0; font-size: 16px; font-weight: 800; }
+
+/* 레벨 업 축하 화면 */
+.lvup { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px 20px; background: rgba(10, 14, 12, .55); }
+.lvup-card { width: 100%; max-width: 360px; background: var(--surface); border-radius: 24px; padding: 28px 22px 20px; text-align: center; box-shadow: var(--shadow); }
+.lvup-card p { margin: 0; }
+.lvup-kicker { font-size: 15px; font-weight: 800; color: var(--gold); }
+.lvup-num {
+  position: relative; display: inline-block; margin: 10px 0 18px; font-size: 96px; font-weight: 800; line-height: 1;
+  letter-spacing: -.05em; font-variant-numeric: tabular-nums; animation: lvpop .55s cubic-bezier(.2, 1.5, .4, 1) both;
+}
+.lvup-num::before {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 150px; height: 150px; margin: -75px 0 0 -75px;
+  border-radius: 50%; border: 3px solid var(--gold-fill); opacity: 0; animation: lvring .9s .15s ease-out both;
+}
+@keyframes lvpop { from { transform: scale(.55); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes lvring { from { transform: scale(.4); opacity: .9; } to { transform: scale(1.7); opacity: 0; } }
+.lvup-rw { background: var(--gold-bg); border-radius: 14px; padding: 12px 14px; text-align: left; }
+.lvup-rw p { font-size: 13px; font-weight: 700; color: var(--gold); }
+.lvup-rw ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lvup-rw li { font-size: 17px; font-weight: 800; display: flex; flex-direction: column; }
+.lvup-rw li small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.lvup-none { color: var(--muted); font-size: 15px; line-height: 1.55; }
+.lvup .btnrow { flex-direction: column; margin-top: 18px; }
+.lvup .btn.wide { margin-top: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lvup-num, .lvup-num::before { animation: none; }
+  .lvup-num::before { display: none; }
 }
