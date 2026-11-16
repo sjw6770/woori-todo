@@ -57,7 +57,7 @@ jobs:
           done
       - name: Set function secrets
         run: |
-          $SB secrets set --remote="$PROJECT_REF" --yes \
+          $SB secrets set --project-ref "$PROJECT_REF" --yes \
             VAPID_PUBLIC_KEY="$VAPID_PUBLIC_KEY" \
             VAPID_PRIVATE_KEY="$CLEAN_VAPID_PRIVATE_KEY" \
             VAPID_SUBJECT="mailto:bellone1110@gmail.com" \
@@ -66,12 +66,12 @@ jobs:
           if [ -n "$kk" ]; then
             echo "::add-mask::$kk"
             echo "KAKAO_REST_KEY 길이: ${#kk} (보통 32) → 장소 검색: 카카오"
-            $SB secrets set --remote="$PROJECT_REF" --yes KAKAO_REST_KEY="$kk"
+            $SB secrets set --project-ref "$PROJECT_REF" --yes KAKAO_REST_KEY="$kk"
           else
             echo "KAKAO_REST_KEY 없음 → 장소 검색: OpenStreetMap"
           fi
       - name: Deploy function
-        run: $SB functions deploy push-tick --remote="$PROJECT_REF" --no-verify-jwt --yes
+        run: $SB functions deploy push-tick --project-ref "$PROJECT_REF" --no-verify-jwt --yes
       - name: Health check (cron 과 같은 방식으로 호출)
         run: |
           sleep 5
