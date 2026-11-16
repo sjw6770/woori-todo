@@ -85,6 +85,7 @@ jobs:
                   -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
                   -d "{\"query\": \"$1\"}"; echo; }
           q "select name, mood_profile from public.members"
+          q "select (select count(*) from public.joy_settings) as joy_settings, (select count(*) from public.joy_activities) as joy_activities, (select count(*) from public.push_subs where app = 'woori') as woori_subs"
           q "select jobname, schedule, active from cron.job"
           q "select status_code, left(content::text, 80) as body, created from net._http_response order by created desc limit 3"
           q "select m.name, coalesce(t.total, 0) as xp, (select count(*) from public.rewards r where r.member_id = m.id) as rewards from public.members m left join public.xp_totals t on t.member_id = m.id"
@@ -100,3 +101,9 @@ jobs:
               -d "{\"action\":\"place-test\",\"query\":\"$q\"}" | head -c 500; echo
             sleep 2
           done
+      - name: JOY webhook check (잘못된 토큰은 403)
+        run: |
+          code=$(curl -s -o /tmp/joy.txt -w '%{http_code}' -X POST "https://$PROJECT_REF.supabase.co/functions/v1/push-tick" \
+            -H "Content-Type: application/json" -d '{"action":"joy-event","token":"not-a-token","event":"open"}')
+          cat /tmp/joy.txt; echo " ($code)"
+          [ "$code" = "403" ] || { echo "::error::JOY 웹훅 응답이 예상과 다름"; exit 1; }

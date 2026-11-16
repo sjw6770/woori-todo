@@ -229,11 +229,62 @@ function beforeLabel(min: number) {
   return `${min}분 뒤`;
 }
 
+// ---------------------------------------------------------------- JOY (스크린타임 트리거)
+// 아이폰 단축어 '앱 자동화'가 지정 앱이 열림/닫힘을 알려 줌 → 연속 사용 시간 계산
+const JOY_MERGE_GAP = 3 * 60000;     // 닫았다가 3분 안에 다시 열면 같은 연속 사용으로 봄
+const JOY_STALE = 6 * 3600000;       // 닫힘 신호가 6시간 없으면 끝난 것으로 봄
+
+async function joyEvent(token: string, event: string) {
+  if (!token || !["open", "close"].includes(event)) return { error: "bad request", status: 400 };
+  const { data: set } = await db.from("joy_settings").select("member_id,trigger_minutes").eq("hook_token", token).maybeSingle();
+  if (!set) return { error: "unknown token", status: 403 };
+  const now = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const { data: u } = await db.from("joy_usage").select("*").eq("member_id", set.member_id).maybeSingle();
+  if (event === "open") {
+    const lastClose = u?.last_close_at ? Date.parse(u.last_close_at) : 0;
+    const continuing = u?.started_at && (u.open || now - lastClose < JOY_MERGE_GAP) && now - Date.parse(u.last_open_at ?? u.started_at) < JOY_STALE;
+    const started = continuing ? Date.parse(u!.started_at) : now;
+    const next = continuing && u?.next_check_at !== undefined ? u.next_check_at : iso(started + set.trigger_minutes * 60000);
+    await db.from("joy_usage").upsert({
+      member_id: set.member_id, open: true, started_at: iso(started), last_open_at: iso(now),
+      last_close_at: u?.last_close_at ?? null, next_check_at: next, updated_at: iso(now),
+    });
+    return { ok: true, continuing: Boolean(continuing), minutes: Math.round((now - started) / 60000) };
+  }
+  await db.from("joy_usage").upsert({
+    member_id: set.member_id, open: false, started_at: u?.started_at ?? null, last_open_at: u?.last_open_at ?? null,
+    last_close_at: iso(now), next_check_at: u?.next_check_at ?? null, updated_at: iso(now),
+  });
+  return { ok: true };
+}
+
+async function joyCheck() {
+  const out: string[] = [];
+  const nowIso = new Date().toISOString();
+  const { data: rows } = await db.from("joy_usage").select("*").eq("open", true).lte("next_check_at", nowIso);
+  for (const u of rows ?? []) {
+    if (Date.now() - Date.parse(u.last_open_at ?? u.started_at) > JOY_STALE) {
+      await db.from("joy_usage").update({ open: false }).eq("member_id", u.member_id);
+      continue;
+    }
+    const { data: set } = await db.from("joy_settings").select("recheck_minutes").eq("member_id", u.member_id).maybeSingle();
+    const mins = Math.round((Date.now() - Date.parse(u.started_at)) / 60000);
+    // 먼저 다음 확인 시각을 미뤄서 중복 발송을 막음
+    await db.from("joy_usage").update({ next_check_at: new Date(Date.now() + (set?.recheck_minutes ?? 30) * 60000).toISOString() })
+      .eq("member_id", u.member_id);
+    await sendTo(u.member_id, { title: "Still having fun?", body: `${mins}분째 보는 중이야. 아직 재밌어?`, tag: "joy-check", url: `./?check=${mins}` }, "joy");
+    out.push(`joy-check ${mins}m`);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- 발송
 type Payload = { title: string; body: string; tag?: string; url?: string };
 
-async function sendTo(memberId: string, payload: Payload) {
-  const { data: subs } = await db.from("push_subs").select("*").eq("member_id", memberId);
+// app: 'woori'(우리할일) | 'joy'(JOY) — 각 앱에 등록한 기기로만 보냄
+async function sendTo(memberId: string, payload: Payload, app: "woori" | "joy" = "woori") {
+  const { data: subs } = await db.from("push_subs").select("*").eq("member_id", memberId).eq("app", app);
   let sent = 0;
   for (const s of subs ?? []) {
     try {
@@ -337,6 +388,13 @@ async function tick() {
     }
   }
 
+  // 6) JOY: 지정 앱을 연속으로 오래 쓰면 "Still having fun?"
+  try {
+    log.push(...(await joyCheck()));
+  } catch (e) {
+    console.error("joy", (e as Error).message);
+  }
+
   // 5) 진정 시간 종료 알림 (둘 다에게) + 12시간 넘게 열려 있는 세션 정리
   const { data: calms } = await db.from("calm_sessions").select("id,ends_at").is("ended_at", null);
   for (const s of (calms ?? []) as { id: string; ends_at: string }[]) {
@@ -370,6 +428,13 @@ async function fromApp(req: Request, body: Record<string, string>) {
 
   if (body.action === "test") {
     const n = await sendTo(me.id, { title: "🔔 테스트 알림", body: "알림이 잘 오고 있어요!", tag: "test" });
+    return json({ ok: true, sent: n });
+  }
+
+  // JOY 설정 화면의 "지금 받아보기": 연속 사용 알림을 바로 한 번 보냄
+  if (body.action === "joy-test") {
+    const mins = Number(body.minutes) || 45;
+    const n = await sendTo(me.id, { title: "Still having fun?", body: `${mins}분째 보는 중이야. 아직 재밌어?`, tag: "joy-check", url: `./?check=${mins}` }, "joy");
     return json({ ok: true, sent: n });
   }
 
@@ -482,6 +547,11 @@ Deno.serve(async (req) => {
     if (body.action === "tick") {
       if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) return json({ error: "forbidden" }, 403);
       return json(await tick());
+    }
+    // JOY: 아이폰 단축어가 보내는 지정 앱 열림/닫힘 (로그인 대신 개인 토큰)
+    if (body.action === "joy-event") {
+      const r = await joyEvent(String(body.token ?? ""), String(body.event ?? ""));
+      return json(r, (r as { status?: number }).status ?? 200);
     }
     // 배포 확인용: 장소 검색이 실제로 되는지 (CRON_SECRET 필요)
     if (body.action === "place-test") {
