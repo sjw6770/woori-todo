@@ -13,6 +13,7 @@ class SupabaseStore {
   calm = null;   // 진행 중인 진정하기 (없으면 null)
   moods = [];    // 하루 감정 기록 (최근 120일)
   moodPrivate = [];   // 내 비공개 메모 [{ day, note }]
+  diaries = [];  // 하루 일기 (내 것 전부 + 상대의 '함께 보기', 최근 1년)
   places = [];   // 갈 곳 목록 (카카오 장소는 id·검색어만 있음 → 화면에서 실시간 조회)
   #sb; #listeners = []; #channel = null;
 
@@ -61,7 +62,7 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest, calm, moods, places, priv] = await Promise.all([
+    const [m, items, comps, quest, calm, moods, places, priv, diaries] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
@@ -70,7 +71,9 @@ class SupabaseStore {
       this.#all(() => this.#sb.from('moods').select('*').gte('day', since).order('day').order('member_id')).catch(() => []),
       this.#all(() => this.#sb.from('places').select('*').order('created_at', { ascending: false }).order('id')).catch(() => []),
       this.#all(() => this.#sb.from('mood_private').select('day,note').gte('day', since).order('day')).catch(() => []),
+      this.#all(() => this.#sb.from('diaries').select('*').gte('day', addDays(nowKST().date, -365)).order('day', { ascending: false }).order('member_id')).catch(() => []),
     ]);
+    this.diaries = diaries;
     this.places = places;
     this.moodPrivate = priv;   // 내 비공개 메모만 (보안 규칙상 상대 것은 안 옴)
     if (m.error) throw new Error(m.error.message);
@@ -107,6 +110,7 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'moods' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'places' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mood_private' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'diaries' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -202,6 +206,16 @@ class SupabaseStore {
     const { error } = await this.#sb.from('moods').delete().eq('member_id', this.me.id).eq('day', day);
     if (error) throw new Error(error.message);
     await this.#sb.from('mood_private').delete().eq('member_id', this.me.id).eq('day', day);
+    await this.load();
+  }
+  async saveDiary({ day, body, shared }) {
+    const { error } = await this.#sb.from('diaries').upsert({ member_id: this.me.id, day, body, shared }, { onConflict: 'member_id,day' });
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async deleteDiary(day) {
+    const { error } = await this.#sb.from('diaries').delete().eq('member_id', this.me.id).eq('day', day);
+    if (error) throw new Error(error.message);
     await this.load();
   }
 
@@ -339,6 +353,18 @@ function seedMoods() {
   return out;
 }
 
+// 예시 일기
+function seedDiaries() {
+  const d = nowKST().date;
+  const at = (day) => `${day}T13:00:00.000Z`;
+  return [
+    { member_id: 'm1', day: addDays(d, -1), body: '퇴근하고 같이 장 봐서 파스타 해 먹음. 소스가 좀 짰는데 지윤이가 맛있다고 해 줘서 기분 좋았다.', shared: true },
+    { member_id: 'm2', day: addDays(d, -1), body: '오랜만에 둘이 산책. 해방촌 골목 불빛이 예뻤다. 다음 주엔 신라호텔 뷔페!', shared: true },
+    { member_id: 'm1', day: addDays(d, -2), body: '회의가 길어서 지침. 내일은 운동 꼭 가기.', shared: false },
+    { member_id: 'm2', day: addDays(d, -3), body: '나만 보는 일기 (예시)', shared: false },
+  ].map((x) => ({ ...x, created_at: at(x.day), updated_at: at(x.day) }));
+}
+
 // 예시 비공개 메모 (본인만 보임)
 function seedPrivate() {
   const d = nowKST().date;
@@ -402,6 +428,8 @@ class DemoStore {
     this.moods = this.#db.moods.filter((x) => x.member_id === this.me.id || x.shared);
     if (!this.#db.moodPrivate) this.#db.moodPrivate = seedPrivate();
     this.moodPrivate = this.#db.moodPrivate.filter((x) => x.member_id === this.me.id);
+    if (!this.#db.diaries) this.#db.diaries = seedDiaries();
+    this.diaries = this.#db.diaries.filter((x) => x.member_id === this.me.id || x.shared).sort((a, b) => b.day.localeCompare(a.day));
     if (!this.#db.places) this.#db.places = seedPlaces();
     this.places = [...this.#db.places].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
@@ -470,6 +498,17 @@ class DemoStore {
   async deleteMood(day) {
     this.#db.moods = this.#db.moods.filter((x) => !(x.member_id === this.me.id && x.day === day));
     this.#db.moodPrivate = this.#db.moodPrivate.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#write(); this.#sync();
+  }
+  async saveDiary({ day, body, shared }) {
+    const old = this.#db.diaries.find((x) => x.member_id === this.me.id && x.day === day);
+    this.#db.diaries = this.#db.diaries.filter((x) => x !== old);
+    const now = new Date().toISOString();
+    this.#db.diaries.push({ member_id: this.me.id, day, body, shared, created_at: old?.created_at ?? now, updated_at: now });
+    this.#write(); this.#sync();
+  }
+  async deleteDiary(day) {
+    this.#db.diaries = this.#db.diaries.filter((x) => !(x.member_id === this.me.id && x.day === day));
     this.#write(); this.#sync();
   }
   // 데모 검색: 예시 장소 목록에서 찾음

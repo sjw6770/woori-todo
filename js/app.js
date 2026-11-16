@@ -20,6 +20,10 @@ const state = {
   lvWho: null,             // 레벨 화면에서 보고 있는 사람 (null = 나)
   calmHidden: null,        // "잠깐 닫기"한 진정하기 세션 id
   moodWho: null,           // 감정 화면에서 보고 있는 사람 (null = 나)
+  diaryWho: null,          // 일기 화면에서 보고 있는 사람 (null = 나)
+  diaryDay: null,          // 일기 쓰는 날짜 (null = 오늘)
+  diaryShared: null,       // 공개 범위 선택 (null = 기존 값·마지막 선택)
+  diaryAll: false, diaryDelArm: null,
   moodRange: 7,            // 그래프 기간 7 | 30
   moodKeys: {},            // 그래프에 보이는 항목 (기록 방식별, 없으면 기본값)
   upTab: 'list',           // 일정 탭: list | places
@@ -220,7 +224,7 @@ function todayView() {
     ${questSection('daily', daily, d)}
     ${questSection('sub', sub, d)}
     ${tasks.length ? '' : `<section><p class="empty">이 날은 퀘스트가 없어요.<br><button class="linkbtn" data-act="add">퀘스트 추가하기</button></p></section>`}
-    ${d === today() ? `<section>${moodShortcut()}</section>` : ''}
+    ${d === today() ? `<section class="shortcuts">${moodShortcut()}${diaryShortcut()}</section>` : ''}
   </main>`;
 }
 
@@ -245,6 +249,95 @@ function moodShortcut() {
   return e
     ? `<button class="moodrow" data-act="view" data-v="mood"><span class="mr-emoji">${esc(e.emoji || '📝')}</span><span class="mr-text">오늘 감정을 기록했어요<small>${scoreText(e, 2) || esc(e.note || '')}</small></span><span class="mr-go">${ICON.right}</span></button>`
     : `<button class="moodrow" data-act="mood-add" data-day="${today()}"><span class="mr-emoji">📝</span><span class="mr-text">오늘 하루 어땠어요?<small>감정을 기록하고 하루를 정리해요</small></span><span class="mr-go">${ICON.right}</span></button>`;
+}
+
+// ------------------------------------------------------------------ 하루 일기 (한 사람당 하루 한 편)
+const dLabel = (day) => `${Number(day.slice(5, 7))}월 ${Number(day.slice(8, 10))}일 ${W[new Date(day + 'T00:00:00Z').getUTCDay()]}`;
+const myDiary = (day) => store.diaries.find((x) => x.member_id === store.me.id && x.day === day) ?? null;
+// 쓰다 만 글은 이 기기에 잠깐 보관 (앱을 닫아도 남음)
+const DRAFT_KEY = 'woori-diary-drafts';
+const drafts = (() => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}'); } catch { return {}; } })();
+const saveDrafts = () => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(drafts)); } catch {} };
+const lastDiaryShared = () => { try { return localStorage.getItem('woori-diary-shared') === '1'; } catch { return false; } };
+function diaryStreak(memberId) {
+  const days = new Set(store.diaries.filter((x) => x.member_id === memberId).map((x) => x.day));
+  let d = today();
+  if (!days.has(d)) d = addDays(d, -1);   // 오늘 아직 안 썼으면 어제부터 셈
+  let n = 0;
+  while (days.has(d)) { n++; d = addDays(d, -1); }
+  return n;
+}
+
+function diaryShortcut() {
+  const e = myDiary(today());
+  return `<button class="moodrow" data-act="view" data-v="diary"><span class="mr-emoji">📔</span><span class="mr-text">${e ? '오늘 일기를 썼어요' : '오늘 일기 쓰기'}<small>${e ? esc(e.body.slice(0, 40)) : '하루를 짧게라도 남겨요'}</small></span><span class="mr-go">${ICON.right}</span></button>`;
+}
+
+function diaryView() {
+  const who = member(state.diaryWho) ?? store.me;
+  const isMe = who.id === store.me.id;
+  const t = today();
+  const day = state.diaryDay ?? t;
+  const tabs = store.members.map((m) =>
+    `<button role="tab" data-act="diarywho" data-v="${m.id}" aria-selected="${m.id === who.id}">${m.id === store.me.id ? '나' : esc(m.name)}</button>`).join('');
+  const entries = store.diaries.filter((x) => x.member_id === who.id).sort((a, b) => b.day.localeCompare(a.day));
+  const monthN = entries.filter((x) => x.day.slice(0, 7) === t.slice(0, 7)).length;
+  const streak = diaryStreak(who.id);
+  const p = store.members.find((m) => m.id !== store.me.id);
+
+  let editor = '';
+  if (isMe) {
+    const e = myDiary(day);
+    const text = drafts[day] ?? e?.body ?? '';
+    const shared = state.diaryShared ?? (e ? e.shared : lastDiaryShared());
+    const mood = store.moods.find((m) => m.member_id === store.me.id && m.day === day);
+    editor = `<section class="dcard">
+      <div class="d-head">
+        <button class="d-nav" data-act="diary-day" data-v="-1" aria-label="전날">${ICON.right}</button>
+        <p><b>${day === t ? '오늘' : day === addDays(t, -1) ? '어제' : ''}</b> ${dLabel(day)}${mood?.emoji ? ` <span aria-label="그날 기분">${esc(mood.emoji)}</span>` : ''}</p>
+        <button class="d-nav next" data-act="diary-day" data-v="1" aria-label="다음 날" ${day >= t ? 'disabled' : ''}>${ICON.right}</button>
+      </div>
+      <textarea id="diary-body" rows="9" maxlength="5000" placeholder="오늘 있었던 일, 좋았던 것, 아쉬웠던 것…">${esc(text)}</textarea>
+      <div class="d-foot">
+        <div class="seg2" role="radiogroup" aria-label="공개 범위">
+          <label><input type="radio" name="dshare" value="1" data-act="diary-share" ${shared ? 'checked' : ''}><span>함께 보기</span></label>
+          <label><input type="radio" name="dshare" value="0" data-act="diary-share" ${shared ? '' : 'checked'}><span>🔒 나만 보기</span></label>
+        </div>
+        <span class="d-count" data-dcount>${text.length.toLocaleString()} / 5,000</span>
+      </div>
+      <p class="d-hint">${shared ? `${esc(p?.name ?? '상대')}도 볼 수 있어요` : '나만 볼 수 있어요'}${e ? ` · ${drafts[day] != null && drafts[day] !== e.body ? '고친 내용 저장 전' : `저장됨 ${new Date(e.updated_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })}`}` : drafts[day] ? ' · 저장 전' : ''}</p>
+      <div class="d-acts">
+        <button class="btn primary" data-act="diary-save">${e ? '저장' : '일기 저장'}</button>
+        ${e ? `<button class="linkbtn danger" data-act="diary-del">${state.diaryDelArm === day ? '한 번 더 누르면 삭제' : '삭제'}</button>` : ''}
+      </div>
+    </section>`;
+  }
+
+  const list = entries.filter((x) => !(isMe && x.day === day)).slice(0, state.diaryAll ? 365 : 14);
+  return `
+  <header class="top"><h1 class="plain">일기</h1><p class="sub">매일 하루를 짧게라도 남겨요</p></header>
+  <div class="chips" role="tablist">${tabs}</div>
+  <main class="lists diary">
+    ${editor}
+    <section class="dstats">
+      <div><b>${streak}<small>일</small></b><span>연속으로 썼어요</span></div>
+      <div><b>${monthN}<small>일</small></b><span>이번 달 쓴 날</span></div>
+      <div><b>${entries.length}<small>편</small></b><span>${isMe ? '지금까지' : '함께 보기로 쓴 일기'}</span></div>
+    </section>
+    <section>
+      <h2>${isMe ? '지난 일기' : `${esc(who.name)}의 일기`}</h2>
+      ${list.length ? list.map((x) => {
+        const mood = store.moods.find((m) => m.member_id === x.member_id && m.day === x.day);
+        return `<article class="dentry">
+          <header><b>${x.day === t ? '오늘 · ' : ''}${dLabel(x.day)}</b>${mood?.emoji ? ` ${esc(mood.emoji)}` : ''}${isMe && !x.shared ? '<span class="d-lock">🔒 나만 보기</span>' : ''}
+            ${isMe ? `<button class="linkbtn" data-act="diary-open" data-v="${x.day}">수정</button>` : ''}</header>
+          <p class="d-body ${x.body.length > 140 ? 'clamp' : ''}">${esc(x.body)}</p>
+          ${x.body.length > 140 ? '<button class="linkbtn d-more" data-act="diary-more">더 보기</button>' : ''}
+        </article>`;
+      }).join('') : `<p class="empty">${isMe ? '아직 지난 일기가 없어요.' : `${esc(who.name)}이 함께 보기로 저장한 일기가 아직 없어요.`}</p>`}
+      ${entries.length > list.length + (isMe && myDiary(day) ? 1 : 0) && !state.diaryAll ? '<button class="linkbtn" data-act="diary-all">전체 보기</button>' : ''}
+    </section>
+  </main>`;
 }
 
 function moodView() {
@@ -1167,8 +1260,11 @@ function settingsView() {
 // ------------------------------------------------------------------ 전체 화면
 function render() {
   if (!store.me) return;
-  const view = { today: todayView, upcoming: upcomingView, mood: moodView, level: levelView, settings: settingsView }[state.view]();
-  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['mood', '감정'], ['level', '레벨'], ['settings', '설정']];
+  // 다시 그려도 입력 중이던 칸·커서를 지킴 (상대 쪽 변경으로 다시 그릴 때)
+  const f = document.activeElement;
+  const keep = f && f.id && $app.contains(f) && /^(TEXTAREA|INPUT)$/.test(f.tagName) ? { id: f.id, s: f.selectionStart, e: f.selectionEnd, y: window.scrollY } : null;
+  const view = { today: todayView, upcoming: upcomingView, mood: moodView, diary: diaryView, level: levelView, settings: settingsView }[state.view]();
+  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['mood', '감정'], ['diary', '일기'], ['level', '레벨'], ['settings', '설정']];
   const calm = activeCalm();
   $app.innerHTML = `
     ${store.demo ? '<div class="demo-banner">데모 모드 · 이 기기에만 저장돼요</div>' : ''}
@@ -1176,6 +1272,10 @@ function render() {
     <div class="screen">${view}</div>
     ${state.view === 'today' || state.view === 'upcoming' ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
     <nav class="tabbar">${tabs.map(([v, l]) => `<button data-act="view" data-v="${v}" aria-current="${state.view === v ? 'page' : 'false'}">${l}</button>`).join('')}</nav>`;
+  if (keep) {
+    const el = document.getElementById(keep.id);
+    if (el) { el.focus({ preventScroll: true }); try { el.setSelectionRange(keep.s, keep.e); } catch {} window.scrollTo(0, keep.y); }
+  }
   updateBadge();
   if (state.view === 'mood') drawMoodChart();
   renderCalm();
@@ -1569,7 +1669,39 @@ $app.addEventListener('click', async (e) => {
   if (!el) return;
   const act = el.dataset.act;
   try {
-    if (act === 'view') { state.view = el.dataset.v; if (state.view === 'today') state.date = today(); render(); window.scrollTo(0, 0); }
+    if (act === 'view') { state.view = el.dataset.v; if (state.view === 'today') state.date = today(); if (state.view === 'diary') { state.diaryDay = null; state.diaryShared = null; } render(); window.scrollTo(0, 0); }
+    else if (act === 'diarywho') { state.diaryWho = el.dataset.v; state.diaryAll = false; render(); }
+    else if (act === 'diary-day' || act === 'diary-open') {
+      const cur = state.diaryDay ?? today();
+      const next = act === 'diary-open' ? el.dataset.v : addDays(cur, Number(el.dataset.v));
+      if (next > today()) return;
+      state.diaryDay = next === today() ? null : next; state.diaryShared = null; state.diaryDelArm = null;
+      render(); if (act === 'diary-open') window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    else if (act === 'diary-share') { state.diaryShared = el.value === '1'; render(); }
+    else if (act === 'diary-more') { const p = el.previousElementSibling; p.classList.toggle('clamp'); el.textContent = p.classList.contains('clamp') ? '더 보기' : '접기'; }
+    else if (act === 'diary-all') { state.diaryAll = true; render(); }
+    else if (act === 'diary-save') {
+      const day = state.diaryDay ?? today();
+      const body = (document.getElementById('diary-body')?.value ?? '').trim();
+      if (!body) { toast('먼저 적어 주세요'); return; }
+      const e = myDiary(day);
+      const shared = state.diaryShared ?? (e ? e.shared : lastDiaryShared());
+      el.disabled = true;
+      try {
+        await store.saveDiary({ day, body, shared });
+        delete drafts[day]; saveDrafts();
+        try { localStorage.setItem('woori-diary-shared', shared ? '1' : '0'); } catch {}
+        state.diaryShared = null;
+        render(); toast(shared ? '일기를 저장했어요' : '나만 보기로 저장했어요');
+      } catch (err) { el.disabled = false; toast(err.message); }
+    }
+    else if (act === 'diary-del') {
+      const day = state.diaryDay ?? today();
+      if (state.diaryDelArm !== day) { state.diaryDelArm = day; render(); return; }
+      state.diaryDelArm = null;
+      try { await store.deleteDiary(day); delete drafts[day]; saveDrafts(); render(); toast('삭제했어요'); } catch (err) { toast(err.message); }
+    }
     else if (act === 'filter') { state.filter = el.dataset.v; render(); }
     else if (act === 'day') { const n = Number(el.dataset.n); state.date = n === 0 ? today() : addDays(state.date, n); render(); }
     else if (act === 'add') openSheet(null);
@@ -1697,3 +1829,12 @@ function loginView(msg = '') {
   let last = today();
   setInterval(() => { if (today() !== last) { if (state.date === last) state.date = today(); last = today(); render(); } }, 60000);
 })();
+
+// 일기: 쓰는 중인 글은 이 기기에 초안으로 보관
+$app.addEventListener('input', (e) => {
+  if (e.target.id !== 'diary-body') return;
+  const day = state.diaryDay ?? today();
+  drafts[day] = e.target.value; saveDrafts();
+  const c = $app.querySelector('[data-dcount]');
+  if (c) c.textContent = `${e.target.value.length.toLocaleString()} / 5,000`;
+});
