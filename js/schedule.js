@@ -30,6 +30,7 @@ function daysInMonth(s) {
 // 이 항목이 해당 날짜에 발생하는가
 export function occursOn(item, date) {
   if (date < item.start_date) return false;
+  if (item.skip_dates?.includes(date)) return false;   // 반복 중 이 날만 건너뜀
   if (item.end_date && date > item.end_date) return false;
   switch (item.repeat) {
     case 'daily':

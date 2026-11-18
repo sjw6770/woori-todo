@@ -679,3 +679,30 @@ html.calm-lock body { overflow: hidden; }
 .d-body.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .d-more { font-size: 13.5px; padding: 4px 0 0; }
 .d-foot .seg2 span { padding: 7px 12px; white-space: nowrap; }
+
+/* 일정 편집 */
+.top.with-act { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.editbtn { flex: none; margin-top: 4px; padding: 7px 14px; border-radius: 999px; font-size: 14px; font-weight: 750; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.editbtn.on { background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+.check.sel { border-radius: 8px; }
+.check.sel[aria-pressed="true"] { background: var(--shared); border-color: var(--shared); color: #fff; }
+.check.sel.off { display: grid; place-items: center; opacity: .35; border-style: dashed; }
+.row.picked { box-shadow: inset 0 0 0 2px var(--shared); }
+.lists.editing { padding-bottom: 150px; }
+.editbar { position: fixed; left: 0; right: 0; z-index: 11; bottom: calc(56px + var(--safe-b)); display: flex; flex-direction: column; gap: 8px;
+  padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px));
+  background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 20px rgba(0, 0, 0, .08); }
+.eb-n { margin: 0; font-size: 13.5px; color: var(--muted); }
+.eb-n b { color: var(--ink); }
+.eb-row { display: flex; gap: 6px; }
+.eb-row button { flex: 1; min-width: 0; padding: 9px 6px; border-radius: 10px; font-size: 13.5px; font-weight: 700; background: var(--field); color: var(--ink); white-space: nowrap; }
+.eb-row button.danger { color: #fff; background: #d0453a; }
+.eb-row button:disabled { opacity: .4; }
+.eb-row input[type=date] { flex: 1.3; min-width: 0; padding: 7px 8px; font-size: 14px; }
+.scope { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: var(--field); }
+.scope p { margin: 0; font-size: 14px; }
+.scope .linkbtn { align-self: flex-start; font-size: 14px; padding: 0; }
+.qdates { display: flex; gap: 6px; flex-wrap: wrap; margin-top: -4px; }
+.qdates button { padding: 6px 11px; border-radius: 999px; font-size: 13px; font-weight: 650; background: var(--field); color: var(--ink); }
+.sheet-acts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
+.sheet-acts .btn { width: 100%; margin-top: 0; padding: 13px; }

@@ -51,7 +51,7 @@ type Item = {
   id: string; kind: "task" | "event"; title: string; owner: string | null;
   start_date: string; time: string | null; end_date: string | null;
   repeat: "none" | "daily" | "weekly" | "monthly"; weekdays: number[];
-  remind_before: number | null; nag_every: number;
+  remind_before: number | null; nag_every: number; skip_dates?: string[];
 };
 type Completion = { item_id: string; occur_date: string };
 type Member = { id: string; name: string; brief_time: string; nag_time: string };
@@ -77,6 +77,7 @@ function daysInMonth(s: string) {
 }
 function occursOn(item: Item, date: string) {
   if (date < item.start_date) return false;
+  if (item.skip_dates?.includes(date)) return false;
   if (item.end_date && date > item.end_date) return false;
   switch (item.repeat) {
     case "daily": return true;

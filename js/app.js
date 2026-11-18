@@ -27,6 +27,9 @@ const state = {
   moodRange: 7,            // 그래프 기간 7 | 30
   moodKeys: {},            // 그래프에 보이는 항목 (기록 방식별, 없으면 기본값)
   upTab: 'list',           // 일정 탭: list | places
+  editMode: false,         // 일정 탭 편집 모드 (여러 개 골라 옮기기·삭제)
+  sel: new Set(),          // 편집 모드에서 고른 항목 id
+  bulkDelArm: false,
   placeQuery: '', placeResults: null, placeSearching: false, placeFilter: 'want', placeTag: null,
 };
 
@@ -94,7 +97,7 @@ const ICON = {
   right: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
-function row(item, date, { showDate = false } = {}) {
+function row(item, date, { showDate = false, select = false } = {}) {
   const done = isDone(store.completions, item.id, date);
   const [c1, c2] = colorsOf(item);
   const meta = [];
@@ -112,10 +115,14 @@ function row(item, date, { showDate = false } = {}) {
     ? `<span class="xp" data-d="${diff}" aria-label="${DIFF[diff].label}, 경험치 ${xpOf(item)}"><b>+${xpOf(item)}</b><small>${DIFF[diff].label}</small></span>`
     : '';
   return `
-  <li class="row ${item.kind} ${done ? 'done' : ''}" style="--c1:${c1};--c2:${c2}">
+  <li class="row ${item.kind} ${done && !select ? 'done' : ''} ${select && state.sel.has(item.id) ? 'picked' : ''}" style="--c1:${c1};--c2:${c2}">
     <span class="stripe" aria-hidden="true"></span>
-    <button class="check" data-act="toggle" data-id="${item.id}" data-date="${date}" aria-pressed="${done}" aria-label="${esc(item.title)} ${done ? '완료 취소' : '완료'}">${ICON.check}</button>
-    <button class="body" data-act="edit" data-id="${item.id}">
+    ${select
+      ? item.repeat === 'none'
+        ? `<button class="check sel" data-act="sel" data-id="${item.id}" aria-pressed="${state.sel.has(item.id)}" aria-label="${esc(item.title)} 선택">${ICON.check}</button>`
+        : `<span class="check sel off" title="반복 일정은 눌러서 수정해요" aria-hidden="true">${ICON.repeat}</span>`
+      : `<button class="check" data-act="toggle" data-id="${item.id}" data-date="${date}" aria-pressed="${done}" aria-label="${esc(item.title)} ${done ? '완료 취소' : '완료'}">${ICON.check}</button>`}
+    <button class="body" data-act="edit" data-id="${item.id}" data-date="${date}">
       <span class="line1">${item.time ? `<span class="time">${hm(item.time)}</span>` : ''}${item.kind === 'event' ? '<span class="kind">약속</span>' : ''}<span class="title">${esc(item.title)}</span></span>
       ${meta.length ? `<span class="meta">${meta.join('')}</span>` : ''}
     </button>
@@ -784,15 +791,31 @@ function upcomingView() {
     const list = store.items.filter((i) => i.repeat !== 'daily' && occursOn(i, d) && passFilter(i)).sort(sortByTime);
     if (list.length) days.push({ d, list });
   }
+  const ed = state.editMode;
+  if (!ed) state.sel.clear();
   return `
   ${upTabs()}
-  <header class="top"><h1 class="plain">다가오는 일정</h1><p class="sub">앞으로 30일 · 매일 반복은 오늘 화면에서 보여요</p></header>
+  <header class="top with-act"><div><h1 class="plain">다가오는 일정</h1><p class="sub">${ed ? '옮기거나 지울 일정을 골라요 · 눌러서 자세히 수정' : '앞으로 30일 · 일정을 누르면 수정할 수 있어요'}</p></div>
+    ${days.length ? `<button class="editbtn ${ed ? 'on' : ''}" data-act="edit-mode">${ed ? '완료' : '편집'}</button>` : ''}</header>
   ${filterChips()}
-  <main class="lists">
+  <main class="lists ${ed ? 'editing' : ''}">
     ${days.length ? days.map(({ d, list }) => `
-      <section><h2>${relDay(d) ? `${relDay(d)} ` : ''}<span>${longDate(d)}</span></h2><ul>${list.map((i) => row(i, d)).join('')}</ul></section>`).join('')
+      <section><h2>${relDay(d) ? `${relDay(d)} ` : ''}<span>${longDate(d)}</span></h2><ul>${list.map((i) => row(i, d, { select: ed })).join('')}</ul></section>`).join('')
       : '<p class="empty">앞으로 30일 동안 잡힌 일정이 없어요.</p>'}
-  </main>`;
+  </main>
+  ${ed ? `<div class="editbar" role="toolbar" aria-label="선택한 일정">
+    <p class="eb-n">${state.sel.size ? `<b>${state.sel.size}개</b> 선택` : '일정을 골라 주세요'}</p>
+    <div class="eb-row">
+      <button data-act="bulk-move" data-v="-1" ${state.sel.size ? '' : 'disabled'}>하루 앞으로</button>
+      <button data-act="bulk-move" data-v="1" ${state.sel.size ? '' : 'disabled'}>하루 뒤로</button>
+      <button data-act="bulk-move" data-v="7" ${state.sel.size ? '' : 'disabled'}>일주일 뒤로</button>
+    </div>
+    <div class="eb-row">
+      <input type="date" id="bulk-date" aria-label="옮길 날짜" min="${today()}" ${state.sel.size ? '' : 'disabled'}>
+      <button data-act="bulk-to" ${state.sel.size ? '' : 'disabled'}>이 날로 옮기기</button>
+      <button class="danger" data-act="bulk-del" ${state.sel.size ? '' : 'disabled'}>${state.bulkDelArm ? '한 번 더 누르면 삭제' : '삭제'}</button>
+    </div>
+  </div>` : ''}`;
 }
 
 // ------------------------------------------------------------------ 갈 곳
@@ -1270,7 +1293,7 @@ function render() {
     ${store.demo ? '<div class="demo-banner">데모 모드 · 이 기기에만 저장돼요</div>' : ''}
     ${calm && state.calmHidden === calm.id ? `<button class="calm-banner" data-act="calm-show"><span>진정 시간</span><b data-calm-left>${calmLeft(calm)}</b><em>다시 열기</em></button>` : ''}
     <div class="screen">${view}</div>
-    ${state.view === 'today' || state.view === 'upcoming' ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
+    ${(state.view === 'today' || state.view === 'upcoming') && !(state.view === 'upcoming' && state.editMode && state.upTab !== 'places') ? `<button class="fab" data-act="add" aria-label="추가">${ICON.plus}</button>` : ''}
     <nav class="tabbar">${tabs.map(([v, l]) => `<button data-act="view" data-v="${v}" aria-current="${state.view === v ? 'page' : 'false'}">${l}</button>`).join('')}</nav>`;
   if (keep) {
     const el = document.getElementById(keep.id);
@@ -1477,8 +1500,10 @@ function updateBadge() {
 }
 
 // ------------------------------------------------------------------ 추가/수정 시트
-function openSheet(item, preset = {}) {
+function openSheet(item, preset = {}, { date: occ = null } = {}) {
   const isNew = !item;
+  // 반복 일정을 특정 날짜에서 열었을 때: '모든 반복' 또는 '이 날만' 고르기
+  const oneOk = !isNew && item.repeat !== 'none' && occ && occursOn(item, occ);
   const it = item ?? {
     kind: 'task', title: '', note: '', owner: store.me.id, start_date: state.view === 'today' ? state.date : today(),
     time: null, end_date: null, repeat: 'none', weekdays: [], remind_before: null, nag_every: 0, difficulty: 'normal',
@@ -1502,6 +1527,14 @@ function openSheet(item, preset = {}) {
       </div>
       <button type="submit" class="linkbtn strong">${isNew ? '추가' : '저장'}</button>
     </div>
+    ${oneOk ? `<div class="scope">
+      <p>반복 일정이에요 · <b>${md(occ)} ${W[dow(occ)]}</b></p>
+      <div class="seg2" role="radiogroup" aria-label="수정 범위">
+        <label><input type="radio" name="scope" value="all" checked><span>모든 반복</span></label>
+        <label><input type="radio" name="scope" value="one"><span>이 날만</span></label>
+      </div>
+      <button type="button" class="linkbtn" data-skip>이 날만 건너뛰기</button>
+    </div>` : ''}
     <input class="title-in" name="title" placeholder="무엇을 할까요?" value="${esc(it.title)}" maxlength="200" required autocomplete="off">
 
     <div class="field"><span>장소 <small>갈 곳에서 추천</small></span>
@@ -1521,8 +1554,12 @@ function openSheet(item, preset = {}) {
       <label class="field"><span>날짜</span><input type="date" name="start_date" value="${it.start_date}" required></label>
       <label class="field"><span>시간</span><input type="time" name="time" value="${hm(it.time)}"></label>
     </div>
+    <div class="qdates" role="group" aria-label="날짜 빠르게 바꾸기">
+      <button type="button" data-qd="today">오늘</button><button type="button" data-qd="tomorrow">내일</button>
+      <button type="button" data-qd="-1">하루 앞</button><button type="button" data-qd="1">하루 뒤</button><button type="button" data-qd="7">일주일 뒤</button>
+    </div>
 
-    <label class="field"><span>반복</span>
+    <label class="field" data-show="multi"><span>반복</span>
       <select name="repeat">
         ${[['none', '반복 안 함'], ['daily', '매일'], ['weekly', '매주'], ['monthly', '매월']].map(([v, l]) => `<option value="${v}" ${it.repeat === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select>
@@ -1552,7 +1589,10 @@ function openSheet(item, preset = {}) {
     <p class="hint" data-show="untimed">시간을 정하면 그 시간에 알림을 받을 수 있어요. 시간이 없어도 아침 브리핑에는 포함돼요.</p>
 
     <label class="field"><span>메모</span><textarea name="note" rows="2" placeholder="장소, 준비물 등">${esc(it.note ?? '')}</textarea></label>
-    ${isNew ? '' : '<button type="button" class="btn danger" data-del>삭제</button>'}
+    ${isNew ? '' : `<div class="sheet-acts">
+      <button type="button" class="btn soft" data-dup>복제</button>
+      <button type="button" class="btn danger" data-del>${it.repeat !== 'none' ? '반복 전체 삭제' : '삭제'}</button>
+    </div>`}
   </form>`;
   document.body.appendChild(wrap);
   const form = wrap.querySelector('form');
@@ -1588,11 +1628,12 @@ function openSheet(item, preset = {}) {
   });
 
   function sync() {
+    const one = form.elements.scope?.value === 'one';
     const kind = form.elements.kind.value;
     const rep = form.elements.repeat.value;
     const timed = Boolean(timeIn.value);
     const show = {
-      weekly: rep === 'weekly', repeating: rep !== 'none', timed, untimed: !timed,
+      weekly: !one && rep === 'weekly', repeating: !one && rep !== 'none', multi: !one, timed, untimed: !timed,
       task: kind === 'task', event: kind === 'event',
       'task-remind': kind === 'task' && form.elements.remind_task.value !== '',
     };
@@ -1600,17 +1641,49 @@ function openSheet(item, preset = {}) {
     form.elements.title.placeholder = kind === 'event' ? '어떤 약속인가요?' : '무엇을 할까요?';
     form.querySelector('[data-qtype]').textContent = `· ${rep === 'none' ? '서브 퀘스트' : '데일리 퀘스트'}`;
   }
-  form.addEventListener('change', sync);
+  form.addEventListener('change', (e) => {
+    // '이 날만'으로 바꾸면 날짜를 그 날로
+    if (e.target.name === 'scope') form.elements.start_date.value = e.target.value === 'one' ? occ : it.start_date;
+    sync();
+  });
   sync();
+
+  // 날짜 빠르게 바꾸기
+  form.querySelector('.qdates').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-qd]');
+    if (!b) return;
+    const cur = form.elements.start_date.value || today();
+    const v = b.dataset.qd;
+    form.elements.start_date.value = v === 'today' ? today() : v === 'tomorrow' ? addDays(today(), 1) : addDays(cur, Number(v));
+    form.elements.start_date.dispatchEvent(new Event('change', { bubbles: true }));
+    toast(`${md(form.elements.start_date.value)} ${W[dow(form.elements.start_date.value)]}로 바꿨어요 · 저장을 눌러야 적용돼요`);
+  });
 
   const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 200); };
   wrap.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   requestAnimationFrame(() => wrap.classList.add('open'));
   if (isNew) setTimeout(() => form.elements.title.focus(), 250);
 
-  form.querySelector('[data-del]')?.addEventListener('click', async () => {
-    if (!confirm(`"${it.title}"을(를) 삭제할까요?${it.repeat !== 'none' ? '\n반복되는 모든 날짜에서 삭제돼요.' : ''}`)) return;
+  // 삭제: 두 번 눌러야 (반복이면 모든 날짜에서 지워짐)
+  const delBtn = form.querySelector('[data-del]');
+  delBtn?.addEventListener('click', async () => {
+    if (!delBtn.dataset.armed) { delBtn.dataset.armed = '1'; delBtn.textContent = it.repeat !== 'none' ? '한 번 더 누르면 모든 날짜에서 삭제' : '한 번 더 누르면 삭제'; return; }
     try { await store.deleteItem(it.id); close(); render(); toast('삭제했어요'); } catch (e) { toast(e.message); }
+  });
+  // 복제: 같은 내용으로 새 항목 (날짜는 고를 수 있게)
+  form.querySelector('[data-dup]')?.addEventListener('click', () => {
+    close();
+    const { id, created_at, updated_at, created_by, skip_dates, ...copy } = it;
+    setTimeout(() => openSheet(null, { ...copy, title: it.title }), 220);
+  });
+  // 반복 중 이 날만 건너뛰기
+  const skipBtn = form.querySelector('[data-skip]');
+  skipBtn?.addEventListener('click', async () => {
+    if (!skipBtn.dataset.armed) { skipBtn.dataset.armed = '1'; skipBtn.textContent = `한 번 더 누르면 ${md(occ)}만 빠져요`; return; }
+    try {
+      await store.saveItem({ id: it.id, skip_dates: [...new Set([...(it.skip_dates ?? []), occ])] });
+      close(); render(); toast(`${md(occ)}만 건너뛰었어요`);
+    } catch (e) { toast(e.message); }
   });
 
   form.addEventListener('submit', async (ev) => {
@@ -1632,8 +1705,19 @@ function openSheet(item, preset = {}) {
       place_id: f.place_id.value || null,
     };
     if (!data.title) return;
-    if (repeat === 'weekly' && !data.weekdays.length) { toast('반복할 요일을 하나 이상 고르세요'); return; }
+    const one = f.scope?.value === 'one';
+    if (!one && repeat === 'weekly' && !data.weekdays.length) { toast('반복할 요일을 하나 이상 고르세요'); return; }
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    if (one) {
+      // 이 날만 바꾸기: 원래 반복에서 그 날을 빼고, 바꾼 내용으로 하루짜리 항목을 새로 만듦
+      try {
+        const { id, ...rest } = data;
+        await store.saveItem({ ...rest, repeat: 'none', weekdays: [], end_date: null });
+        await store.saveItem({ id: it.id, skip_dates: [...new Set([...(it.skip_dates ?? []), occ])] });
+        close(); render(); toast(`${md(occ)}만 바꿨어요`);
+      } catch (e) { toast(e.message); btn.disabled = false; }
+      return;
+    }
     try {
       const saved = await store.saveItem(data);
       close(); render();
@@ -1669,7 +1753,7 @@ $app.addEventListener('click', async (e) => {
   if (!el) return;
   const act = el.dataset.act;
   try {
-    if (act === 'view') { state.view = el.dataset.v; if (state.view === 'today') state.date = today(); if (state.view === 'diary') { state.diaryDay = null; state.diaryShared = null; } render(); window.scrollTo(0, 0); }
+    if (act === 'view') { state.view = el.dataset.v; state.editMode = false; if (state.view === 'today') state.date = today(); if (state.view === 'diary') { state.diaryDay = null; state.diaryShared = null; } render(); window.scrollTo(0, 0); }
     else if (act === 'diarywho') { state.diaryWho = el.dataset.v; state.diaryAll = false; render(); }
     else if (act === 'diary-day' || act === 'diary-open') {
       const cur = state.diaryDay ?? today();
@@ -1705,7 +1789,24 @@ $app.addEventListener('click', async (e) => {
     else if (act === 'filter') { state.filter = el.dataset.v; render(); }
     else if (act === 'day') { const n = Number(el.dataset.n); state.date = n === 0 ? today() : addDays(state.date, n); render(); }
     else if (act === 'add') openSheet(null);
-    else if (act === 'edit') openSheet(store.items.find((i) => i.id === el.dataset.id));
+    else if (act === 'edit') openSheet(store.items.find((i) => i.id === el.dataset.id), {}, { date: el.dataset.date });
+    else if (act === 'edit-mode') { state.editMode = !state.editMode; state.sel.clear(); state.bulkDelArm = false; render(); }
+    else if (act === 'sel') { const id = el.dataset.id; state.sel.has(id) ? state.sel.delete(id) : state.sel.add(id); state.bulkDelArm = false; render(); }
+    else if (act === 'bulk-move' || act === 'bulk-to') {
+      const to = act === 'bulk-to' ? document.getElementById('bulk-date')?.value : null;
+      if (act === 'bulk-to' && !to) { toast('옮길 날짜를 먼저 골라 주세요'); return; }
+      const picked = store.items.filter((i) => state.sel.has(i.id) && i.repeat === 'none');
+      el.disabled = true;
+      for (const i of picked) await store.saveItem({ id: i.id, start_date: to ?? addDays(i.start_date, Number(el.dataset.v)) });
+      state.sel.clear(); render();
+      toast(`${picked.length}개를 ${to ? md(to) + '로' : Number(el.dataset.v) < 0 ? '하루 앞으로' : el.dataset.v === '7' ? '일주일 뒤로' : '하루 뒤로'} 옮겼어요`);
+    }
+    else if (act === 'bulk-del') {
+      if (!state.bulkDelArm) { state.bulkDelArm = true; render(); return; }
+      const picked = [...state.sel];
+      for (const id of picked) await store.deleteItem(id);
+      state.sel.clear(); state.bulkDelArm = false; render(); toast(`${picked.length}개를 삭제했어요`);
+    }
     else if (act === 'toggle') {
       const { id, date } = el.dataset;
       const done = !isDone(store.completions, id, date);
