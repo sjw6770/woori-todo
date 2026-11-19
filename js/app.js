@@ -7,6 +7,7 @@ import {
   DIFF, DIFF_KEYS, xpOf, questType, QUEST_LABEL, earnerOf, levelInfo, xpToReach, LEVEL_BASE, LEVEL_STEP,
 } from './quest.js';
 import { PROFILES, profileOf, MOOD_EMOJIS, emojiLabel, series, average, chartSVG } from './mood.js';
+import { FIELDS as BODY_FIELDS, fmt, signed, logsOf as bodyLogsOf, progress, weekTrend, streak, bodyChartSVG } from './body.js';
 
 const store = createStore();
 const $app = document.getElementById('app');
@@ -24,6 +25,7 @@ const state = {
   diaryDay: null,          // 일기 쓰는 날짜 (null = 오늘)
   diaryShared: null,       // 공개 범위 선택 (null = 기존 값·마지막 선택)
   diaryAll: false, diaryDelArm: null,
+  bodyWho: null, bodyDay: null, bodyDraft: {}, bodyRange: 30, bodyAll: false, bodyGoalEdit: false, bodyDelArm: null,
   moodRange: 7,            // 그래프 기간 7 | 30
   moodKeys: {},            // 그래프에 보이는 항목 (기록 방식별, 없으면 기본값)
   upTab: 'list',           // 일정 탭: list | places
@@ -231,7 +233,7 @@ function todayView() {
     ${questSection('daily', daily, d)}
     ${questSection('sub', sub, d)}
     ${tasks.length ? '' : `<section><p class="empty">이 날은 퀘스트가 없어요.<br><button class="linkbtn" data-act="add">퀘스트 추가하기</button></p></section>`}
-    ${d === today() ? `<section class="shortcuts">${moodShortcut()}${diaryShortcut()}</section>` : ''}
+    ${d === today() ? `<section class="shortcuts">${moodShortcut()}${diaryShortcut()}${bodyShortcut()}</section>` : ''}
   </main>`;
 }
 
@@ -345,6 +347,167 @@ function diaryView() {
       ${entries.length > list.length + (isMe && myDiary(day) ? 1 : 0) && !state.diaryAll ? '<button class="linkbtn" data-act="diary-all">전체 보기</button>' : ''}
     </section>
   </main>`;
+}
+
+// ------------------------------------------------------------------ 체중·인바디
+const bodyGoal = (mid) => store.bodyGoals.find((g) => g.member_id === mid) ?? null;
+const bodyLog = (mid, day) => store.bodyLogs.find((l) => l.member_id === mid && l.day === day) ?? null;
+const parseNum = (v) => { const t = String(v ?? '').trim().replace(',', '.'); return t === '' ? null : Number(t); };
+
+function bodyShortcut() {
+  const l = bodyLog(store.me.id, today());
+  return `<button class="moodrow" data-act="view" data-v="body"><span class="mr-emoji">⚖️</span><span class="mr-text">${l ? `오늘 ${l.weight != null ? `${fmt(l.weight)}kg` : '기록했어요'}` : '오늘 체중 기록하기'}<small>${l?.smm != null ? `골격근량 ${fmt(l.smm)}kg` : '매일 같은 시간에 재면 추세가 잘 보여요'}</small></span><span class="mr-go">${ICON.right}</span></button>`;
+}
+
+function goalRow(key, pr, target) {
+  const f = BODY_FIELDS[key];
+  if (target == null && !pr) return '';
+  const dirUp = target != null && pr && target > pr.start;
+  return `<div class="bg-row">
+    <p class="bg-l"><span>${f.label}</span><b>${pr ? fmt(pr.now) : '–'}<small>${f.unit}</small></b>${target != null ? `<em>→ 목표 ${fmt(target)}${f.unit}</em>` : ''}</p>
+    ${pr && target != null ? `<div class="bg-bar" role="img" aria-label="${f.label} 목표까지 ${Math.round(pr.pct)}%"><i style="width:${pr.pct}%;background:${f.color}"></i></div>
+      <p class="bg-s">${pr.reached ? '🎉 목표 달성!' : `${Math.abs(pr.left).toFixed(1)}${f.unit} ${dirUp ? '더 늘리면' : '더 빼면'} 목표`} · 시작 ${fmt(pr.start)} (${md(pr.startDay)}) 이후 ${signed(pr.change)}</p>`
+      : target != null ? '<p class="bg-s">기록하면 목표까지 얼마나 남았는지 보여요</p>' : ''}
+  </div>`;
+}
+
+function bodyView() {
+  const who = member(state.bodyWho) ?? store.me;
+  const isMe = who.id === store.me.id;
+  const p = partner();
+  const t = today();
+  const tabs = store.members.map((m) => `<button role="tab" data-act="bodywho" data-v="${m.id}" aria-selected="${m.id === who.id}">${m.id === store.me.id ? '나' : esc(m.name)}</button>`).join('');
+  const goal = bodyGoal(who.id);
+  const logs = bodyLogsOf(store.bodyLogs, who.id);
+  const head = `<header class="top"><h1 class="plain">체중</h1><p class="sub">목표를 정하고 매일 기록해요</p></header>
+    <div class="chips" role="tablist">${tabs}</div>`;
+  if (!isMe && !goal) return `${head}<main class="lists body"><p class="empty">${esc(who.name)}이 체중 기록을 아직 공개하지 않았어요.</p></main>`;
+
+  // 목표
+  let goalCard;
+  if (isMe && (state.bodyGoalEdit || !goal || (goal.target_weight == null && goal.target_smm == null))) {
+    goalCard = `<section class="card bgoal edit">
+      <h2>${goal ? '목표 수정' : '목표 정하기'}</h2>
+      <div class="bnum2">
+        <label class="bnum"><span>목표 체중</span><span class="bin"><input id="g-weight" inputmode="decimal" autocomplete="off" placeholder="예: 72.0" value="${goal?.target_weight ?? ''}"><i>kg</i></span></label>
+        <label class="bnum"><span>목표 골격근량</span><span class="bin"><input id="g-smm" inputmode="decimal" autocomplete="off" placeholder="예: 36.0" value="${goal?.target_smm ?? ''}"><i>kg</i></span></label>
+      </div>
+      <label class="switch"><input type="checkbox" id="g-shared" ${goal?.shared ? 'checked' : ''}><span>${esc(p?.name ?? '상대')}에게도 보여 주기</span></label>
+      <p class="hint">하나만 정해도 돼요. 공개하지 않으면 목표와 기록 모두 나만 봐요.</p>
+      <div class="d-acts"><button class="btn primary" data-act="body-goal-save">목표 저장</button>${goal ? '<button class="linkbtn" data-act="body-goal-cancel">취소</button>' : ''}</div>
+    </section>`;
+  } else {
+    const pw = progress(logs, 'weight', goal?.target_weight), pm = progress(logs, 'smm', goal?.target_smm);
+    goalCard = `<section class="card bgoal">
+      ${goalRow('weight', pw, goal?.target_weight != null ? Number(goal.target_weight) : null)}
+      ${goalRow('smm', pm, goal?.target_smm != null ? Number(goal.target_smm) : null)}
+      ${isMe ? `<div class="bg-foot"><span>${goal.shared ? `${esc(p?.name ?? '상대')}도 볼 수 있어요` : '🔒 나만 보기'}</span><button class="linkbtn" data-act="body-goal-edit">목표 수정</button></div>` : ''}
+    </section>`;
+  }
+
+  // 기록 입력 (나만)
+  let form = '';
+  if (isMe) {
+    const day = state.bodyDay ?? t;
+    const l = bodyLog(store.me.id, day);
+    const dr = state.bodyDraft[day] ?? {};
+    const last = [...logs].reverse().find((x) => x.day < day);
+    const val = (k) => esc(dr[k] ?? (l?.[k] != null ? String(l[k]) : ''));
+    form = `<section class="card brec">
+      <div class="d-head">
+        <button class="d-nav" data-act="body-day" data-v="-1" aria-label="전날">${ICON.right}</button>
+        <p><b>${day === t ? '오늘' : day === addDays(t, -1) ? '어제' : ''}</b> ${md(day)} ${W[dow(day)]}</p>
+        <button class="d-nav next" data-act="body-day" data-v="1" aria-label="다음 날" ${day >= t ? 'disabled' : ''}>${ICON.right}</button>
+      </div>
+      <div class="bnum3">
+        ${Object.entries(BODY_FIELDS).map(([k, f]) => `<label class="bnum"><span>${f.label}</span><span class="bin"><input id="b-${k}" data-bk="${k}" inputmode="decimal" autocomplete="off" placeholder="${last?.[k] != null ? fmt(last[k]) : ''}" value="${val(k)}"><i>${f.unit}</i></span></label>`).join('')}
+      </div>
+      <input id="b-note" data-bk="note" maxlength="200" placeholder="메모 (예: 아침 공복, 인바디 측정)" value="${val('note')}">
+      <p class="hint">체중만 적어도 돼요. 골격근량·체지방률은 인바디 잰 날에만 적어요.</p>
+      <div class="d-acts"><button class="btn primary" data-act="body-save">${l ? '수정 저장' : '기록 저장'}</button>
+        ${l ? `<button class="linkbtn danger" data-act="body-del">${state.bodyDelArm === day ? '한 번 더 누르면 삭제' : '삭제'}</button>` : ''}</div>
+    </section>`;
+  }
+
+  // 요약 · 그래프 · 목록
+  const wk = weekTrend(logs, 'weight', t);
+  const range = state.bodyRange;
+  const has = (k) => logs.some((x) => x[k] != null);
+  const charts = Object.keys(BODY_FIELDS).filter(has).map((k) => `
+    <div class="bc-card"><p class="bc-h"><i style="background:${BODY_FIELDS[k].color}"></i>${BODY_FIELDS[k].label} <small>${BODY_FIELDS[k].unit}</small></p>
+      <div class="mc-box bc-box" tabindex="0" aria-label="${BODY_FIELDS[k].label} 그래프, 좌우 화살표로 값 보기"><div class="mc-host bc-host" data-k="${k}"></div><div class="mc-tip" hidden></div></div></div>`).join('');
+  const rows = [...logs].reverse().slice(0, state.bodyAll ? 400 : 14);
+  return `${head}
+  <main class="lists body">
+    ${goalCard}
+    ${form}
+    ${logs.length ? `<section class="dstats">
+      <div><b>${streak(logs, t)}<small>일</small></b><span>연속 기록</span></div>
+      <div><b>${wk.now != null ? fmt(wk.now) : '–'}<small>kg</small></b><span>최근 7일 평균</span></div>
+      <div><b class="${wk.diff == null ? '' : wk.diff < 0 ? 'down' : wk.diff > 0 ? 'up' : ''}">${wk.diff != null ? signed(wk.diff) : '–'}</b><span>지난주 평균보다</span></div>
+    </section>
+    <section>
+      <div class="bc-top"><h2>변화</h2><div class="range" role="group" aria-label="기간">${[[30, '30일'], [90, '90일'], [0, '전체']].map(([v, l]) => `<button data-act="body-range" data-v="${v}" aria-pressed="${range === v}">${l}</button>`).join('')}</div></div>
+      ${charts}
+    </section>
+    <section><h2>기록</h2>
+      <ul class="blist">${rows.map((x, i) => {
+        const prev = [...logs].reverse().slice(i + 1).find((y) => y.weight != null);
+        const dw = x.weight != null && prev ? +(x.weight - prev.weight).toFixed(1) : null;
+        return `<li><span class="bl-d">${md(x.day)} <small>${W[dow(x.day)]}</small></span>
+          <span class="bl-v">${x.weight != null ? `<b>${fmt(x.weight)}</b>kg${dw ? `<em class="${dw < 0 ? 'down' : 'up'}">${signed(dw)}</em>` : ''}` : ''}
+            ${x.smm != null ? `<span class="bl-x">근 ${fmt(x.smm)}</span>` : ''}${x.fat_pct != null ? `<span class="bl-x">체지방 ${fmt(x.fat_pct)}%</span>` : ''}
+            ${x.note ? `<small class="bl-n">${esc(x.note)}</small>` : ''}</span>
+          ${isMe ? `<button class="linkbtn" data-act="body-open" data-v="${x.day}">수정</button>` : ''}</li>`;
+      }).join('')}</ul>
+      ${logs.length > rows.length ? '<button class="linkbtn" data-act="body-all">전체 보기</button>' : ''}
+    </section>` : isMe ? '' : `<p class="empty">아직 기록이 없어요.</p>`}
+  </main>`;
+}
+
+function drawBodyCharts() {
+  const who = member(state.bodyWho) ?? store.me;
+  const logs = bodyLogsOf(store.bodyLogs, who.id);
+  const goal = bodyGoal(who.id);
+  const t = today();
+  const first = logs[0]?.day ?? t;
+  const from = state.bodyRange ? (addDays(t, -state.bodyRange + 1) > first ? addDays(t, -state.bodyRange + 1) : first) : first;
+  for (const host of $app.querySelectorAll('.bc-host')) {
+    const k = host.dataset.k;
+    const target = k === 'weight' ? goal?.target_weight : k === 'smm' ? goal?.target_smm : null;
+    const { svg, pts, plot } = bodyChartSVG(logs, k, { target: target ?? null, width: host.clientWidth, from, to: t });
+    if (!pts.length) { host.innerHTML = '<p class="mc-empty">이 기간에는 기록이 없어요.</p>'; continue; }
+    host.innerHTML = svg;
+    const box = host.parentElement, tip = box.querySelector('.mc-tip'), cross = host.querySelector('.mc-cross');
+    let cur = -1;
+    const show = (i) => {
+      cur = Math.max(0, Math.min(pts.length - 1, i));
+      const p = pts[cur];
+      cross.setAttribute('x1', p.x); cross.setAttribute('x2', p.x); cross.setAttribute('visibility', 'visible');
+      tip.replaceChildren();
+      const h = document.createElement('p'); h.className = 'mt-head'; h.textContent = `${md(p.day)} ${W[dow(p.day)]}`;
+      const r = document.createElement('p'); r.className = 'mt-row';
+      const b = document.createElement('b'); b.textContent = `${fmt(p.v)}${BODY_FIELDS[k].unit}`;
+      r.append(b); tip.append(h, r); tip.hidden = false;
+      const w = tip.offsetWidth;
+      tip.style.left = `${Math.max(0, Math.min(box.clientWidth - w, p.x - w / 2))}px`;
+      tip.style.top = `${plot.t}px`;
+    };
+    const hide = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); cur = -1; };
+    const nearest = (ev) => {
+      const px = ev.clientX - host.getBoundingClientRect().left;
+      let best = 0;
+      pts.forEach((p, i) => { if (Math.abs(p.x - px) < Math.abs(pts[best].x - px)) best = i; });
+      return best;
+    };
+    host.onpointerdown = host.onpointermove = (ev) => show(nearest(ev));
+    host.onpointerleave = (ev) => { if (ev.pointerType === 'mouse') hide(); };
+    box.onkeydown = (ev) => {
+      if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') { ev.preventDefault(); show(cur < 0 ? pts.length - 1 : cur + (ev.key === 'ArrowRight' ? 1 : -1)); }
+      else if (ev.key === 'Escape') hide();
+    };
+    box.onblur = hide;
+  }
 }
 
 function moodView() {
@@ -491,7 +654,7 @@ function drawMoodChart() {
   box.onblur = hide;
 }
 let moodResizeT;
-window.addEventListener('resize', () => { clearTimeout(moodResizeT); moodResizeT = setTimeout(() => { if (state.view === 'mood') drawMoodChart(); }, 150); });
+window.addEventListener('resize', () => { clearTimeout(moodResizeT); moodResizeT = setTimeout(() => { if (state.view === 'mood') drawMoodChart(); if (state.view === 'body') drawBodyCharts(); }, 150); });
 
 // 감정 기록 시트
 function openMoodSheet(day = today(), presetEmoji = null) {
@@ -1286,8 +1449,8 @@ function render() {
   // 다시 그려도 입력 중이던 칸·커서를 지킴 (상대 쪽 변경으로 다시 그릴 때)
   const f = document.activeElement;
   const keep = f && f.id && $app.contains(f) && /^(TEXTAREA|INPUT)$/.test(f.tagName) ? { id: f.id, s: f.selectionStart, e: f.selectionEnd, y: window.scrollY } : null;
-  const view = { today: todayView, upcoming: upcomingView, mood: moodView, diary: diaryView, level: levelView, settings: settingsView }[state.view]();
-  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['mood', '감정'], ['diary', '일기'], ['level', '레벨'], ['settings', '설정']];
+  const view = { today: todayView, upcoming: upcomingView, mood: moodView, diary: diaryView, body: bodyView, level: levelView, settings: settingsView }[state.view]();
+  const tabs = [['today', '오늘'], ['upcoming', '일정'], ['mood', '감정'], ['diary', '일기'], ['body', '체중'], ['level', '레벨'], ['settings', '설정']];
   const calm = activeCalm();
   $app.innerHTML = `
     ${store.demo ? '<div class="demo-banner">데모 모드 · 이 기기에만 저장돼요</div>' : ''}
@@ -1301,6 +1464,7 @@ function render() {
   }
   updateBadge();
   if (state.view === 'mood') drawMoodChart();
+  if (state.view === 'body') drawBodyCharts();
   renderCalm();
   ensurePlaceInfo();
   if (state.view === 'upcoming' && state.upTab === 'places' && state.placeMode === 'map') mountPlaceMap(filteredPlaces());
@@ -1754,6 +1918,47 @@ $app.addEventListener('click', async (e) => {
   const act = el.dataset.act;
   try {
     if (act === 'view') { state.view = el.dataset.v; state.editMode = false; if (state.view === 'today') state.date = today(); if (state.view === 'diary') { state.diaryDay = null; state.diaryShared = null; } render(); window.scrollTo(0, 0); }
+    else if (act === 'bodywho') { state.bodyWho = el.dataset.v; state.bodyAll = false; state.bodyGoalEdit = false; render(); }
+    else if (act === 'body-range') { state.bodyRange = Number(el.dataset.v); render(); }
+    else if (act === 'body-all') { state.bodyAll = true; render(); }
+    else if (act === 'body-goal-edit') { state.bodyGoalEdit = true; render(); }
+    else if (act === 'body-goal-cancel') { state.bodyGoalEdit = false; render(); }
+    else if (act === 'body-day' || act === 'body-open') {
+      const cur = state.bodyDay ?? today();
+      const next = act === 'body-open' ? el.dataset.v : addDays(cur, Number(el.dataset.v));
+      if (next > today()) return;
+      state.bodyDay = next === today() ? null : next; state.bodyDelArm = null;
+      render(); if (act === 'body-open') window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    else if (act === 'body-goal-save') {
+      const tw = parseNum(document.getElementById('g-weight')?.value), ts = parseNum(document.getElementById('g-smm')?.value);
+      if (tw == null && ts == null) { toast('목표 체중이나 목표 골격근량 중 하나는 적어 주세요'); return; }
+      if ((tw != null && !(tw >= 20 && tw <= 300)) || (ts != null && !(ts >= 5 && ts <= 100))) { toast('숫자를 다시 확인해 주세요 (체중 20~300, 골격근량 5~100)'); return; }
+      try {
+        await store.saveBodyGoal({ target_weight: tw, target_smm: ts, shared: document.getElementById('g-shared')?.checked ?? false });
+        state.bodyGoalEdit = false; render(); toast('목표를 저장했어요');
+      } catch (err) { toast(err.message); }
+    }
+    else if (act === 'body-save') {
+      const day = state.bodyDay ?? today();
+      const v = Object.fromEntries(Object.keys(BODY_FIELDS).map((k) => [k, parseNum(document.getElementById(`b-${k}`)?.value)]));
+      if (Object.values(v).every((x) => x == null)) { toast('체중·골격근량·체지방률 중 하나는 적어 주세요'); return; }
+      const bad = Object.entries(v).find(([k, x]) => x != null && !(Number.isFinite(x) && x >= { weight: 20, smm: 5, fat_pct: 1 }[k] && x <= { weight: 300, smm: 100, fat_pct: 70 }[k]));
+      if (bad) { toast(`${BODY_FIELDS[bad[0]].label} 숫자를 다시 확인해 주세요`); return; }
+      const round = (x) => (x == null ? null : Math.round(x * 10) / 10);
+      el.disabled = true;
+      try {
+        await store.saveBodyLog({ day, weight: round(v.weight), smm: round(v.smm), fat_pct: round(v.fat_pct), note: document.getElementById('b-note')?.value.trim() || null });
+        delete state.bodyDraft[day];
+        render(); toast(`${md(day)} 기록을 저장했어요`);
+      } catch (err) { el.disabled = false; toast(err.message); }
+    }
+    else if (act === 'body-del') {
+      const day = state.bodyDay ?? today();
+      if (state.bodyDelArm !== day) { state.bodyDelArm = day; render(); return; }
+      state.bodyDelArm = null;
+      try { await store.deleteBodyLog(day); delete state.bodyDraft[day]; render(); toast('삭제했어요'); } catch (err) { toast(err.message); }
+    }
     else if (act === 'diarywho') { state.diaryWho = el.dataset.v; state.diaryAll = false; render(); }
     else if (act === 'diary-day' || act === 'diary-open') {
       const cur = state.diaryDay ?? today();
@@ -1938,4 +2143,12 @@ $app.addEventListener('input', (e) => {
   drafts[day] = e.target.value; saveDrafts();
   const c = $app.querySelector('[data-dcount]');
   if (c) c.textContent = `${e.target.value.length.toLocaleString()} / 5,000`;
+});
+
+// 체중: 입력 중인 값은 다시 그려도 남게
+$app.addEventListener('input', (e) => {
+  const k = e.target.dataset?.bk;
+  if (!k) return;
+  const day = state.bodyDay ?? today();
+  state.bodyDraft[day] = { ...(state.bodyDraft[day] ?? {}), [k]: e.target.value };
 });

@@ -14,6 +14,7 @@ class SupabaseStore {
   moods = [];    // 하루 감정 기록 (최근 120일)
   moodPrivate = [];   // 내 비공개 메모 [{ day, note }]
   diaries = [];  // 하루 일기 (내 것 전부 + 상대의 '함께 보기', 최근 1년)
+  bodyGoals = []; bodyLogs = [];   // 체중·인바디 (내 것 + 상대가 공개한 것)
   places = [];   // 갈 곳 목록 (카카오 장소는 id·검색어만 있음 → 화면에서 실시간 조회)
   #sb; #listeners = []; #channel = null;
 
@@ -62,7 +63,7 @@ class SupabaseStore {
 
   async load() {
     const since = addDays(nowKST().date, -120);
-    const [m, items, comps, quest, calm, moods, places, priv, diaries] = await Promise.all([
+    const [m, items, comps, quest, calm, moods, places, priv, diaries, bgoals, blogs] = await Promise.all([
       this.#sb.from('members').select('*').order('created_at'),
       this.#all(() => this.#sb.from('items').select('*').order('start_date').order('id')),
       this.#all(() => this.#sb.from('completions').select('*').gte('occur_date', since).order('occur_date').order('item_id')),
@@ -72,8 +73,11 @@ class SupabaseStore {
       this.#all(() => this.#sb.from('places').select('*').order('created_at', { ascending: false }).order('id')).catch(() => []),
       this.#all(() => this.#sb.from('mood_private').select('day,note').gte('day', since).order('day')).catch(() => []),
       this.#all(() => this.#sb.from('diaries').select('*').gte('day', addDays(nowKST().date, -365)).order('day', { ascending: false }).order('member_id')).catch(() => []),
+      this.#all(() => this.#sb.from('body_goals').select('*').order('member_id')).catch(() => []),
+      this.#all(() => this.#sb.from('body_logs').select('*').gte('day', addDays(nowKST().date, -730)).order('day').order('member_id')).catch(() => []),
     ]);
     this.diaries = diaries;
+    this.bodyGoals = bgoals; this.bodyLogs = blogs;
     this.places = places;
     this.moodPrivate = priv;   // 내 비공개 메모만 (보안 규칙상 상대 것은 안 옴)
     if (m.error) throw new Error(m.error.message);
@@ -111,6 +115,8 @@ class SupabaseStore {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'places' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'mood_private' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'diaries' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'body_goals' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'body_logs' }, reload)
       .subscribe();
     // 앱으로 돌아올 때 최신화
     document.addEventListener('visibilitychange', () => { if (!document.hidden) reload(); });
@@ -215,6 +221,21 @@ class SupabaseStore {
   }
   async deleteDiary(day) {
     const { error } = await this.#sb.from('diaries').delete().eq('member_id', this.me.id).eq('day', day);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async saveBodyGoal(patch) {
+    const { error } = await this.#sb.from('body_goals').upsert({ member_id: this.me.id, ...patch });
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async saveBodyLog(row) {
+    const { error } = await this.#sb.from('body_logs').upsert({ member_id: this.me.id, ...row }, { onConflict: 'member_id,day' });
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+  async deleteBodyLog(day) {
+    const { error } = await this.#sb.from('body_logs').delete().eq('member_id', this.me.id).eq('day', day);
     if (error) throw new Error(error.message);
     await this.load();
   }
@@ -353,6 +374,28 @@ function seedMoods() {
   return out;
 }
 
+// 예시 체중·인바디 기록 (최근 6주, 가끔 빠진 날)
+function seedBody() {
+  const d = nowKST().date;
+  const bodyLogs = [];
+  for (let k = 42; k >= 1; k--) {
+    if (k % 6 === 0) continue;
+    const t = 42 - k;
+    const wob = Math.sin(k * 1.7) * 0.35;
+    bodyLogs.push({ member_id: 'm1', day: addDays(d, -k), weight: +(78.2 - t * 0.07 + wob).toFixed(1),
+      smm: k % 7 === 3 ? +(33.6 + t * 0.03).toFixed(1) : null, fat_pct: k % 7 === 3 ? +(23.4 - t * 0.06).toFixed(1) : null, note: null });
+    if (k % 2) bodyLogs.push({ member_id: 'm2', day: addDays(d, -k), weight: +(56.4 - t * 0.03 + wob / 2).toFixed(1),
+      smm: k % 7 === 3 ? +(21.2 + t * 0.02).toFixed(1) : null, fat_pct: k % 7 === 3 ? +(28.1 - t * 0.04).toFixed(1) : null, note: null });
+  }
+  return {
+    bodyGoals: [
+      { member_id: 'm1', target_weight: 72.0, target_smm: 36.0, shared: true },
+      { member_id: 'm2', target_weight: 53.0, target_smm: 22.5, shared: true },
+    ],
+    bodyLogs,
+  };
+}
+
 // 예시 일기
 function seedDiaries() {
   const d = nowKST().date;
@@ -429,6 +472,10 @@ class DemoStore {
     if (!this.#db.moodPrivate) this.#db.moodPrivate = seedPrivate();
     this.moodPrivate = this.#db.moodPrivate.filter((x) => x.member_id === this.me.id);
     if (!this.#db.diaries) this.#db.diaries = seedDiaries();
+    if (!this.#db.bodyGoals) Object.assign(this.#db, seedBody());
+    const canSee = (mid) => mid === this.me.id || this.#db.bodyGoals.find((g) => g.member_id === mid)?.shared;
+    this.bodyGoals = this.#db.bodyGoals.filter((g) => canSee(g.member_id));
+    this.bodyLogs = this.#db.bodyLogs.filter((l) => canSee(l.member_id)).sort((a, b) => a.day.localeCompare(b.day));
     this.diaries = this.#db.diaries.filter((x) => x.member_id === this.me.id || x.shared).sort((a, b) => b.day.localeCompare(a.day));
     if (!this.#db.places) this.#db.places = seedPlaces();
     this.places = [...this.#db.places].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -509,6 +556,20 @@ class DemoStore {
   }
   async deleteDiary(day) {
     this.#db.diaries = this.#db.diaries.filter((x) => !(x.member_id === this.me.id && x.day === day));
+    this.#write(); this.#sync();
+  }
+  async saveBodyGoal(patch) {
+    const g = this.#db.bodyGoals.find((x) => x.member_id === this.me.id);
+    if (g) Object.assign(g, patch); else this.#db.bodyGoals.push({ member_id: this.me.id, target_weight: null, target_smm: null, shared: false, ...patch });
+    this.#write(); this.#sync();
+  }
+  async saveBodyLog(row) {
+    this.#db.bodyLogs = this.#db.bodyLogs.filter((x) => !(x.member_id === this.me.id && x.day === row.day));
+    this.#db.bodyLogs.push({ member_id: this.me.id, weight: null, smm: null, fat_pct: null, note: null, ...row });
+    this.#write(); this.#sync();
+  }
+  async deleteBodyLog(day) {
+    this.#db.bodyLogs = this.#db.bodyLogs.filter((x) => !(x.member_id === this.me.id && x.day === day));
     this.#write(); this.#sync();
   }
   // 데모 검색: 예시 장소 목록에서 찾음
