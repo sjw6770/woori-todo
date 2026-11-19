@@ -9,7 +9,7 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) 
 class SupabaseStore {
   demo = false;
   me = null; members = []; items = []; completions = [];
-  xpTotals = {}; xpLog = []; rewards = [];
+  xpTotals = {}; xpLog = []; rewards = []; xpSettings = {};
   calm = null;   // 진행 중인 진정하기 (없으면 null)
   moods = [];    // 하루 감정 기록 (최근 120일)
   moodPrivate = [];   // 내 비공개 메모 [{ day, note }]
@@ -90,15 +90,17 @@ class SupabaseStore {
 
   // 퀘스트 테이블이 아직 없어도(업데이트 직후) 앱은 그대로 동작
   async #loadQuest() {
-    const [t, l, r] = await Promise.all([
+    const [t, l, r, st] = await Promise.all([
       this.#sb.from('xp_totals').select('*'),
       this.#sb.from('xp_log').select('*').order('created_at', { ascending: false }).limit(100),
       this.#sb.from('rewards').select('*').order('level'),
+      this.#sb.from('xp_settings').select('*'),
     ]);
-    if (t.error || l.error || r.error) return { xpTotals: {}, xpLog: [], rewards: [] };
+    if (t.error || l.error || r.error) return { xpTotals: {}, xpLog: [], rewards: [], xpSettings: {} };
     return {
       xpTotals: Object.fromEntries(t.data.map((x) => [x.member_id, x.total])),
       xpLog: l.data, rewards: r.data,
+      xpSettings: Object.fromEntries((st.data ?? []).map((x) => [x.member_id, x])),
     };
   }
 
@@ -175,6 +177,13 @@ class SupabaseStore {
 
   async claimReward(id, claimed) {
     const { error } = await this.#sb.from('rewards').update({ claimed_at: claimed ? new Date().toISOString() : null }).eq('id', id);
+    if (error) throw new Error(error.message);
+    await this.load();
+  }
+
+  // 계획 실패 패널티 배율 (0 끄기 · 1 · 2)
+  async savePenalty(mult) {
+    const { error } = await this.#sb.from('xp_settings').upsert({ member_id: this.me.id, penalty_mult: mult });
     if (error) throw new Error(error.message);
     await this.load();
   }
@@ -447,7 +456,7 @@ function seedPlaces() {
 class DemoStore {
   demo = true;
   me = null; members = []; items = []; completions = [];
-  xpTotals = {}; xpLog = []; rewards = [];
+  xpTotals = {}; xpLog = []; rewards = []; xpSettings = {};
   calm = null;
   moods = [];
   moodPrivate = [];
@@ -465,6 +474,18 @@ class DemoStore {
     this.xpTotals = {};
     for (const x of this.#db.xp_log) this.xpTotals[x.member_id] = (this.xpTotals[x.member_id] ?? 0) + x.xp;
     this.xpLog = [...this.#db.xp_log].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100);
+    if (!this.#db.xpSettings) {
+      // 예시: 종원 1배, 지윤 2배, 어제 종원이 못 한 계획 하나
+      const y = addDays(nowKST().date, -1);
+      this.#db.xpSettings = { m1: { member_id: 'm1', penalty_mult: 1, penalty_since: addDays(y, -7) }, m2: { member_id: 'm2', penalty_mult: 2, penalty_since: addDays(y, -7) } };
+      this.#db.xp_log.push({ id: uid(), member_id: 'm1', item_id: null, penalty_item: null, occur_date: y, title: '영어 단어 30개', xp: -25, quest_type: 'penalty',
+        created_at: new Date(Date.parse(nowKST().date + 'T00:01:00+09:00')).toISOString() });
+      this.#write();
+      this.xpTotals = {};
+      for (const x of this.#db.xp_log) this.xpTotals[x.member_id] = (this.xpTotals[x.member_id] ?? 0) + x.xp;
+      this.xpLog = [...this.#db.xp_log].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100);
+    }
+    this.xpSettings = this.#db.xpSettings;
     this.rewards = [...this.#db.rewards].sort((a, b) => a.level - b.level);
     this.calm = this.#db.calm && !this.#db.calm.ended_at ? this.#db.calm : null;
     if (!this.#db.moods) this.#db.moods = seedMoods();   // 예전 데모 데이터에 감정 기록 추가
@@ -526,6 +547,10 @@ class DemoStore {
   async deleteReward(id) { this.#db.rewards = this.#db.rewards.filter((x) => x.id !== id); this.#write(); this.#sync(); }
   async claimReward(id, claimed) {
     this.#db.rewards.find((x) => x.id === id).claimed_at = claimed ? new Date().toISOString() : null;
+    this.#write(); this.#sync();
+  }
+  async savePenalty(mult) {
+    this.#db.xpSettings[this.me.id] = { ...(this.#db.xpSettings[this.me.id] ?? { member_id: this.me.id, penalty_since: addDays(nowKST().date, 1) }), penalty_mult: mult };
     this.#write(); this.#sync();
   }
   async startCalm({ minutes, message }) {

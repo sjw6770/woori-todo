@@ -13,7 +13,7 @@ export const xpOf = (item) => (item.kind === 'task' ? DIFF[item.difficulty]?.xp 
 
 // 반복하는 할일 = 데일리 퀘스트, 한 번 하는 할일 = 서브 퀘스트
 export const questType = (item) => (item.repeat === 'none' ? 'sub' : 'daily');
-export const QUEST_LABEL = { daily: '데일리 퀘스트', sub: '서브 퀘스트' };
+export const QUEST_LABEL = { daily: '데일리 퀘스트', sub: '서브 퀘스트', penalty: '못 한 계획' };
 
 // 개인 퀘스트는 담당자, 공통 퀘스트는 체크한 사람이 경험치를 받음
 export const earnerOf = (item, doneBy) => item.owner ?? doneBy;
@@ -26,6 +26,7 @@ export const need = (L) => LEVEL_BASE + LEVEL_STEP * (L - 1);
 export const xpToReach = (L) => LEVEL_BASE * (L - 1) + (LEVEL_STEP * (L - 1) * (L - 2)) / 2;
 
 export function levelInfo(total = 0) {
+  total = Math.max(0, total);   // 패널티가 있어도 0 아래로는 안 내려감
   let level = 1;
   while (total >= xpToReach(level + 1)) level++;
   const into = total - xpToReach(level);

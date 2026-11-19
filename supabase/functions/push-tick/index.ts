@@ -52,6 +52,7 @@ type Item = {
   start_date: string; time: string | null; end_date: string | null;
   repeat: "none" | "daily" | "weekly" | "monthly"; weekdays: number[];
   remind_before: number | null; nag_every: number; skip_dates?: string[];
+  difficulty?: string; created_at?: string;
 };
 type Completion = { item_id: string; occur_date: string };
 type Member = { id: string; name: string; brief_time: string; nag_time: string };
@@ -311,6 +312,44 @@ async function claim(key: string) {
 }
 
 // ---------------------------------------------------------------- tick
+// 난이도별 경험치 (002_quests.sql 의 quest_xp, js/quest.js 와 같은 숫자)
+const QUEST_XP: Record<string, number> = { easy: 10, normal: 25, hard: 50, epic: 100 };
+
+async function applyPenalties(day: string, M: Member[], I: Item[], C: Completion[]) {
+  const out: string[] = [];
+  const [{ data: st }, { data: tot }, { data: done }] = await Promise.all([
+    db.from("xp_settings").select("member_id,penalty_mult,penalty_since"),
+    db.from("xp_totals").select("member_id,total"),
+    db.from("xp_log").select("member_id,penalty_item").eq("occur_date", day).not("penalty_item", "is", null),
+  ]);
+  const set = new Map(((st ?? []) as { member_id: string; penalty_mult: number; penalty_since: string }[]).map((x) => [x.member_id, x]));
+  const total = new Map(((tot ?? []) as { member_id: string; total: number }[]).map((x) => [x.member_id, x.total ?? 0]));
+  const already = new Set(((done ?? []) as { member_id: string; penalty_item: string }[]).map((x) => `${x.member_id}:${x.penalty_item}`));
+  const dayEnd = Date.parse(`${addDays(day, 1)}T00:00:00+09:00`);
+  const failed = I.filter((i) => i.kind === "task" && occursOn(i, day) && !isDone(C, i.id, day)
+    && (!i.created_at || Date.parse(i.created_at) < dayEnd));   // 그날이 끝난 뒤 만든 할일은 제외
+  for (const m of M) {
+    const s = set.get(m.id);
+    const mult = s?.penalty_mult ?? 0;
+    if (!mult || !s || day < s.penalty_since) continue;
+    let have = total.get(m.id) ?? 0;
+    const lost: string[] = [];
+    for (const i of failed.filter((i) => relevant(i, m.id))) {
+      if (already.has(`${m.id}:${i.id}`)) continue;
+      const amount = Math.min((QUEST_XP[i.difficulty ?? "normal"] ?? 25) * mult, Math.max(0, have));   // 0 아래로는 안 깎음
+      const { error } = await db.from("xp_log").insert({
+        member_id: m.id, item_id: null, penalty_item: i.id, occur_date: day, title: i.title,
+        xp: -amount, quest_type: "penalty",
+      });
+      if (error) { if (!/duplicate|unique/i.test(error.message)) console.error("penalty insert", error.message); continue; }
+      have -= amount;
+      lost.push(`${i.title} −${amount}`);
+    }
+    if (lost.length) out.push(`penalty ${m.name} ${day}: ${lost.join(", ")}`);
+  }
+  return out;
+}
+
 async function tick() {
   const now = nowKST();
   const inWindow = (m: number) => m <= now.min && m > now.min - 10; // 최근 10분 (누락 대비)
@@ -343,6 +382,8 @@ async function tick() {
       const lines = list.slice(0, 6).map((i) => `${i.kind === "event" ? "📅" : "☐"} ${when(i)} ${i.title}`.replace("  ", " "));
       if (list.length > 6) lines.push(`외 ${list.length - 6}개`);
       if (od.length) lines.push(`⚠️ 밀린 할일 ${od.length}개`);
+      const { data: pen } = await db.from("xp_log").select("xp").eq("member_id", m.id).eq("quest_type", "penalty").eq("occur_date", addDays(now.date, -1));
+      if (pen?.length) lines.push(`💸 어제 못 한 계획 ${pen.length}개 · 경험치 ${pen.reduce((t: number, x: { xp: number }) => t + x.xp, 0)}`);
       await sendTo(m.id, {
         title: list.length ? `${m.name}님, 오늘 할일 ${tasks} · 약속 ${events}` : `${m.name}님, 오늘은 일정이 없어요`,
         body: lines.join("\n") || "여유로운 하루 보내세요 🙂",
@@ -394,6 +435,13 @@ async function tick() {
     log.push(...(await joyCheck()));
   } catch (e) {
     console.error("joy", (e as Error).message);
+  }
+
+  // 8) 계획 실패 패널티: 0시~0시 30분 사이에 '어제' 체크 못 한 할일만큼 경험치 깎기
+  //    (같은 사람·할일·날짜는 한 번만 — xp_log_penalty_uq. 실패해도 다음 분에 다시 시도)
+  if (now.min < 30) {
+    try { log.push(...(await applyPenalties(addDays(now.date, -1), M, I, C))); }
+    catch (e) { console.error("penalty", (e as Error).message); }
   }
 
   // 7) PAUSE: 진정 시간이 끝나면 둘 다에게 "다시 체크" (연장할 때마다 한 번씩)

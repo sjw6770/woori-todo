@@ -756,3 +756,16 @@ html.calm-lock body { overflow: hidden; }
 .bl-v em.up { color: var(--up); }
 .bl-n { flex-basis: 100%; }
 .blist .linkbtn { padding: 0; font-size: 13px; flex: none; }
+
+/* 계획 실패 패널티 */
+.pencard h2 { display: flex; align-items: baseline; gap: 8px; margin: 0; }
+.pencard h2 span { font-size: 13px; font-weight: 700; color: var(--muted); }
+.seg3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: var(--field); border-radius: 12px; padding: 4px; }
+.seg3 button { padding: 9px 0; border-radius: 9px; font-weight: 750; font-size: 14.5px; color: var(--muted); }
+.seg3 button[aria-checked="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.pen-week { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--danger); }
+.pen-risk { font-style: normal; font-size: 12px; font-weight: 700; color: var(--danger); margin-left: 8px; white-space: nowrap; }
+.pen-tag { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; margin-right: 6px; padding: 4px 6px; border-radius: 8px;
+  font-weight: 800; font-size: 13px; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); flex: none; }
+.pen-tag small { font-size: 10px; font-weight: 700; }
+.xplog li.neg b { color: var(--danger); }

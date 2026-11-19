@@ -60,8 +60,13 @@ const ga = (name = '') => {
 const totalOf = (mid) => store.xpTotals[mid] ?? 0;
 const levelOf = (mid) => levelInfo(totalOf(mid));
 const todayXp = (mid) => store.xpLog
-  .filter((x) => x.member_id === mid && nowKST(Date.parse(x.created_at)).date === today())
+  .filter((x) => x.member_id === mid && x.xp > 0 && nowKST(Date.parse(x.created_at)).date === today())
   .reduce((s, x) => s + x.xp, 0);
+// 계획 실패 패널티: 배율(0·1·2)과 적용 시작일
+const penaltyOf = (mid) => store.xpSettings?.[mid] ?? null;
+const penaltyMult = (mid, day = today()) => { const p = penaltyOf(mid); return p && day >= p.penalty_since ? p.penalty_mult : 0; };
+// 이 할일을 이 날 못 해서 깎인 경험치 (내 것)
+const penaltyFor = (itemId, date) => store.xpLog.find((x) => x.quest_type === 'penalty' && x.penalty_item === itemId && x.occur_date === date && x.member_id === store.me.id) ?? null;
 const rewardsOf = (mid) => store.rewards.filter((r) => r.member_id === mid).sort((a, b) => a.level - b.level);
 const levelsNow = () => Object.fromEntries(store.members.map((m) => [m.id, levelOf(m.id).level]));
 const isStandalone =() => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -114,7 +119,7 @@ function row(item, date, { showDate = false, select = false } = {}) {
   if (item.note) meta.push(`<span class="note">${esc(item.note)}</span>`);
   const diff = DIFF[item.difficulty] ? item.difficulty : 'normal';
   const xp = item.kind === 'task'
-    ? `<span class="xp" data-d="${diff}" aria-label="${DIFF[diff].label}, 경험치 ${xpOf(item)}"><b>+${xpOf(item)}</b><small>${DIFF[diff].label}</small></span>`
+    ? `${!done && penaltyFor(item.id, date) ? `<span class="pen-tag" title="그날 못 해서 깎인 경험치">${penaltyFor(item.id, date).xp}<small>깎임</small></span>` : ''}<span class="xp" data-d="${diff}" aria-label="${DIFF[diff].label}, 경험치 ${xpOf(item)}"><b>+${xpOf(item)}</b><small>${DIFF[diff].label}</small></span>`
     : '';
   return `
   <li class="row ${item.kind} ${done && !select ? 'done' : ''} ${select && state.sel.has(item.id) ? 'picked' : ''}" style="--c1:${c1};--c2:${c2}">
@@ -195,8 +200,10 @@ function questSection(type, list, d) {
   const open = list.filter((i) => !isDone(store.completions, i.id, d));
   const closed = list.filter((i) => isDone(store.completions, i.id, d));
   const left = open.reduce((s, i) => s + xpOf(i), 0);
+  const mult = d === today() ? penaltyMult(store.me.id, d) : 0;
+  const risk = mult ? open.filter((i) => i.kind === 'task' && (i.owner == null || i.owner === store.me.id)).reduce((s, i) => s + xpOf(i) * mult, 0) : 0;
   return `
-  <section><h2>${QUEST_LABEL[type]} <span>${closed.length}/${list.length}${left ? ` · +${left} XP 남음` : ' · 모두 클리어'}</span></h2>
+  <section><h2>${QUEST_LABEL[type]} <span>${closed.length}/${list.length}${left ? ` · +${left} XP 남음` : ' · 모두 클리어'}</span>${risk ? `<em class="pen-risk">자정까지 못 하면 −${risk}</em>` : ''}</h2>
     ${open.length ? `<ul>${open.map((i) => row(i, d)).join('')}</ul>` : ''}
     ${closed.length ? `<ul class="closed">${closed.map((i) => row(i, d)).join('')}</ul>` : ''}
   </section>`;
@@ -775,6 +782,23 @@ function rewardRow(r, info) {
   </li>`;
 }
 
+function penaltyCard(who, isMe) {
+  const p = penaltyOf(who.id);
+  const mult = p?.penalty_mult ?? 0;
+  const lost7 = store.xpLog.filter((x) => x.member_id === who.id && x.quest_type === 'penalty' && x.occur_date >= addDays(today(), -7)).reduce((s, x) => s + x.xp, 0);
+  const since = p && p.penalty_since > today() ? ` · ${md(p.penalty_since)} 할일부터 적용` : '';
+  return `<section class="card pencard">
+    <h2>계획 실패 패널티 <span>${mult ? `${mult}배${since}` : '꺼짐'}</span></h2>
+    ${isMe ? `<div class="seg3" role="radiogroup" aria-label="패널티 배율">
+        ${[[0, '끄기'], [1, '1배'], [2, '2배']].map(([v, l]) => `<button role="radio" data-act="penalty" data-v="${v}" aria-checked="${mult === v}">${l}</button>`).join('')}
+      </div>` : ''}
+    <p class="hint">${mult
+      ? `그날 할일을 그날 안에 못 하면 다음 날 0시에 그 퀘스트 경험치${mult === 2 ? '의 2배가' : '만큼'} 깎여요. 늦게라도 하면 원래 경험치는 받아요. 경험치는 0 아래로 내려가지 않아요.`
+      : '꺼 두면 못 한 계획이 있어도 경험치가 깎이지 않아요.'}${mult ? ' 공통 할일은 각자 설정대로 둘 다 깎여요.' : ''}</p>
+    ${lost7 ? `<p class="pen-week">최근 7일 동안 ${Math.abs(lost7)} XP 깎였어요</p>` : ''}
+  </section>`;
+}
+
 function levelView() {
   const who = member(state.lvWho) ?? store.me;
   const info = levelOf(who.id);
@@ -798,6 +822,8 @@ function levelView() {
       <p class="lvhero-total">누적 ${info.total.toLocaleString()} XP · 오늘 +${todayXp(who.id)} XP</p>
     </section>
 
+    ${penaltyCard(who, isMe)}
+
     <section>
       <h2>레벨 보상 <button class="linkbtn h2btn" data-act="reward-add">${isMe ? '보상 추가' : `${esc(who.name)}에게 보상 걸기`}</button></h2>
       ${rws.length ? `
@@ -812,7 +838,7 @@ function levelView() {
     <section>
       <h2>최근 경험치</h2>
       ${log.length ? `<ul class="xplog">${log.map((x) => `
-        <li><span class="xl-title">${esc(x.title)}<small>${QUEST_LABEL[x.quest_type]} · ${md(x.occur_date)}</small></span><b>+${x.xp}</b></li>`).join('')}</ul>`
+        <li class="${x.xp < 0 ? 'neg' : ''}"><span class="xl-title">${esc(x.title)}<small>${QUEST_LABEL[x.quest_type] ?? ''} · ${md(x.occur_date)}</small></span><b>${x.xp < 0 ? `−${Math.abs(x.xp)}` : x.quest_type === 'penalty' ? '0' : `+${x.xp}`}</b></li>`).join('')}</ul>`
       : '<p class="empty">퀘스트를 완료하면 여기에 쌓여요.</p>'}
     </section>
 
@@ -1995,6 +2021,10 @@ $app.addEventListener('click', async (e) => {
     else if (act === 'day') { const n = Number(el.dataset.n); state.date = n === 0 ? today() : addDays(state.date, n); render(); }
     else if (act === 'add') openSheet(null);
     else if (act === 'edit') openSheet(store.items.find((i) => i.id === el.dataset.id), {}, { date: el.dataset.date });
+    else if (act === 'penalty') {
+      const v = Number(el.dataset.v);
+      try { await store.savePenalty(v); render(); toast(v ? `못 한 계획은 경험치 ${v}배만큼 깎여요` : '패널티를 껐어요'); } catch (err) { toast(err.message); }
+    }
     else if (act === 'edit-mode') { state.editMode = !state.editMode; state.sel.clear(); state.bulkDelArm = false; render(); }
     else if (act === 'sel') { const id = el.dataset.id; state.sel.has(id) ? state.sel.delete(id) : state.sel.add(id); state.bulkDelArm = false; render(); }
     else if (act === 'bulk-move' || act === 'bulk-to') {
